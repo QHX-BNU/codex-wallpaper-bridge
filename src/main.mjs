@@ -5,13 +5,15 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  protocol,
+  session,
   shell,
   Tray,
   utilityProcess,
 } from "electron";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import {
   invokeBridgeAction,
   resolveBridgeRoot,
@@ -20,28 +22,35 @@ import {
 } from "./bridge-runner.mjs";
 import {
   collectCdpDiagnostics,
-  evaluateInCodexTargets,
   isCdpEndpointReady,
   waitForCodexTarget,
 } from "./cdp-client.mjs";
 import { closeCodexProcesses, launchCodex } from "./codex-launcher.mjs";
-import { buildCompatibilityRestoreScript, buildCompatibilityScript } from "./compatibility-script.mjs";
-import { detectInstallations, validateCdpPort, validateExecutable } from "./installations.mjs";
+import { detectInstallations, selectInstallationId, validateCdpPort, validateExecutable } from "./installations.mjs";
 import { runLaunchAndInjectFlow } from "./launch-flow.mjs";
 import { dailyLogFilename, formatLogEntry, sanitizeLogText } from "./local-logging.mjs";
 import { createTrayController } from "./tray-controller.mjs";
+import { prepareAcceptanceContext } from "./acceptance-context.mjs";
+import { verifyCdpEndpointOwner } from "./cdp-owner.mjs";
+import { createPreviewSession, stopPreviewProcess } from "./preview-session.mjs";
+import { createDesktopEngineHost } from "./desktop-engine-host.mjs";
+import { registerDesktopRendererScheme, installDesktopRendererProtocol } from "./desktop-renderer-protocol.mjs";
+import { DESKTOP_RENDERER_URL } from "../bridge-runtime/src/desktop-origin.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const rendererPath = path.join(here, "renderer", "index.html");
+const rendererRoot = path.join(here, "renderer");
 const preloadPath = path.join(here, "preload.cjs");
-const rendererUrl = pathToFileURL(rendererPath).href;
+const rendererUrl = DESKTOP_RENDERER_URL;
+registerDesktopRendererScheme(protocol);
+const acceptanceContext = await prepareAcceptanceContext({ appPath: app.getAppPath(), isPackaged: app.isPackaged });
+if (acceptanceContext) app.setPath("userData", acceptanceContext.userData);
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let mainWindow = null;
-let previewProcess = null;
-let previewUrl = null;
-let previewPort = null;
 let trayController = null;
 let isQuitting = false;
+let shutdownRequested = false;
+let shutdownComplete = false;
+let shutdownPromise = null;
 let hasShownTrayNotice = false;
 let settings = {
   manualExecutables: [],
@@ -54,6 +63,26 @@ let settingsPath = null;
 let logsRoot = null;
 let bridgeRoot = null;
 let logWriteQueue = Promise.resolve();
+let nativeEngineHost = null;
+// Cache only the selected executable descriptor, never a successful PID/port
+// ownership result. Background CDP attachments still perform a fresh check.
+let verifiedEndpointInstallation = null;
+let pendingOwnerCheck = null;
+const previewSession = createPreviewSession({
+  start: (port, { onChild }) => startBridgePreview({
+    executablePath: process.execPath,
+    bridgeRoot,
+    port,
+    onLog: log,
+    processFactory: forkBridgeUtility,
+    onChild,
+  }),
+  stop: stopPreviewProcess,
+  validateUrl: assertTrustedControlUrl,
+  onDisconnected: () => {
+    if (!isQuitting) mainWindow?.webContents.send("cwb:tray-action", "control-disconnected");
+  },
+});
 
 function forkBridgeUtility(modulePath, args, { cwd }) {
   const utilityPath = resolveBridgeUtilityPath({
@@ -61,15 +90,38 @@ function forkBridgeUtility(modulePath, args, { cwd }) {
     compiledRoot: here,
     resourcesPath: process.resourcesPath,
   });
-  return utilityProcess.fork(utilityPath, args, {
+  const ownedNativeProvider = args[0] === "preview";
+  const bridgeEnv = { ...process.env, ...acceptanceContext?.bridgeEnv };
+  if (ownedNativeProvider) nativeEngineHost ??= createDesktopEngineHost({
+    electron: { BrowserWindow, session, nativeImage, ipcMain }, env: bridgeEnv,
+    verifyEndpoint: async (port) => {
+      let installation = verifiedEndpointInstallation?.port === port
+        && verifiedEndpointInstallation.installation.id === settings.selectedId
+        ? verifiedEndpointInstallation.installation : null;
+      if (!installation) {
+        const state = await currentState();
+        installation = state.installations.find(({ id }) => id === state.selectedId);
+      }
+      if (!installation) throw new Error("没有所选的 Codex 安装目标");
+      await verifySelectedOwner(installation, port);
+      return { verified: true };
+    },
+  });
+  const child = utilityProcess.fork(utilityPath, args, {
     cwd,
     env: {
-      ...process.env,
+      ...bridgeEnv,
       CWB_BRIDGE_CLI: modulePath,
+      CWB_NATIVE_ENGINE_PROVIDER: ownedNativeProvider ? "owned-parent-v1" : "",
     },
     stdio: "pipe",
     serviceName: "Codex Wallpaper Bridge",
   });
+  if (ownedNativeProvider) {
+    try { nativeEngineHost.attach(child); }
+    catch { child.kill(); throw new Error("原生引擎资源通道未能建立"); }
+  }
+  return child;
 }
 
 function log(entry) {
@@ -89,6 +141,24 @@ function log(entry) {
     );
   };
   logWriteQueue = logWriteQueue.then(append, append).catch(() => {});
+}
+
+function logStartupPhase({ phase, elapsedMs, ok }) {
+  const labels = {
+    discovery: "安装发现", endpoint: "调试端口探测", owner: "进程身份核验",
+    confirmation: "等待用户确认", close: "关闭已确认实例", launch: "启动 Codex",
+    target: "等待 Codex 页面", control: "准备壁纸服务", inject: "注入流程",
+    apply: "等待注入及媒体就绪", total: "点击到流程结束",
+  };
+  if (!labels[phase] || !Number.isFinite(elapsedMs)) return;
+  log({ stream: "system", text: `[注入计时] ${labels[phase]}：${Math.round(elapsedMs)} ms${ok ? "" : "（未成功）"}\n` });
+}
+
+async function measureStartupPhase(phase, task) {
+  const startedAt = performance.now();
+  let ok = false;
+  try { const result = await task(); ok = true; return result; }
+  finally { logStartupPhase({ phase, elapsedMs: performance.now() - startedAt, ok }); }
 }
 
 async function loadSettings() {
@@ -123,11 +193,7 @@ async function saveSettings() {
 
 async function currentState() {
   const installations = await detectInstallations({ manualExecutables: settings.manualExecutables });
-  if (settings.selectedId && !installations.some(({ id }) => id === settings.selectedId)) {
-    settings.selectedId = installations[0]?.id || null;
-  } else if (!settings.selectedId && installations[0]) {
-    settings.selectedId = installations[0].id;
-  }
+  settings.selectedId = selectInstallationId(installations, settings.selectedId);
   return {
     installations,
     selectedId: settings.selectedId,
@@ -152,11 +218,13 @@ function assertTrustedEvent(event) {
 function registerHandler(channel, handler) {
   ipcMain.handle(channel, async (event, payload) => {
     assertTrustedEvent(event);
+    assertNotQuitting();
     return handler(payload);
   });
 }
 
 async function runOperation(name, task) {
+  if (shutdownRequested) return { ok: false, message: "正在退出，不能启动新的壁纸操作" };
   if (activeOperation) return { ok: false, message: `正在执行“${activeOperation}”，请稍候` };
   activeOperation = name;
   log({ stream: "system", text: `\n[${name}] 开始\n` });
@@ -172,8 +240,8 @@ async function runOperation(name, task) {
   }
 }
 
-async function resolveInstallation(installationId) {
-  const state = await currentState();
+async function resolveInstallation(installationId, snapshot = null) {
+  const state = snapshot ?? await currentState();
   const installation = state.installations.find(({ id }) => id === installationId);
   if (!installation) throw new Error("请选择有效的 Codex 安装");
   settings.selectedId = installation.id;
@@ -184,13 +252,30 @@ async function resolveInstallation(installationId) {
 async function writeCompatibilityDiagnostic({ port, installationId, reason }) {
   let diagnostics = { targets: [] };
   let collectionError = null;
-  try {
-    diagnostics = await collectCdpDiagnostics(validateCdpPort(port));
-  } catch (error) {
-    collectionError = error.message;
-  }
   const current = await currentState().catch(() => ({ installations: [] }));
   const installation = current.installations.find(({ id }) => id === installationId) || null;
+  try {
+    await verifySelectedOwner(installation, validateCdpPort(port));
+    const collected = await collectCdpDiagnostics(validateCdpPort(port));
+    // URLs and probe titles are needed internally for target detection, not in
+    // saved reports: they can contain an auth route or a conversation title.
+    diagnostics = {
+      collectedAt: collected.collectedAt,
+      browser: collected.browser,
+      targets: collected.targets.map(({ type, score, titleMatchesCodex, probe, diagnostics: surfaces }, targetIndex) => ({
+        targetIndex, type, score, titleMatchesCodex,
+        probe: {
+          hasRoot: probe?.hasRoot === true,
+          semanticHookCount: probe?.semanticHookCount,
+          composerHookCount: probe?.composerHookCount,
+          descendantCount: probe?.descendantCount,
+        },
+        diagnostics: surfaces,
+      })),
+    };
+  } catch {
+    collectionError = "诊断采集失败或目标身份未核验";
+  }
   const report = {
     schemaVersion: 2,
     createdAt: new Date().toISOString(),
@@ -214,16 +299,14 @@ async function writeCompatibilityDiagnostic({ port, installationId, reason }) {
 }
 
 async function injectOnceAtPort({ port, adaptive }) {
+  assertNotQuitting();
   const startedAt = performance.now();
-  const control = await ensureControlPanel(port);
-  const injection = await invokeBridgeAction({ controlUrl: control.url, action: "inject" });
-  const compatibility = await evaluateInCodexTargets(
-    port,
-    buildCompatibilityScript({ adaptive: Boolean(adaptive) }),
-  );
+  const control = await measureStartupPhase("control", () => ensureControlPanel(port));
+  assertNotQuitting();
+  const injection = await measureStartupPhase("apply", () => invokeBridgeAction({ controlUrl: control.url, action: "inject", adaptive: Boolean(adaptive) }));
   const elapsedMs = Math.round((performance.now() - startedAt) * 10) / 10;
   return {
-    compatibility,
+    compatibility: injection.compatibility || [],
     adaptive: Boolean(adaptive),
     injection,
     elapsedMs,
@@ -239,6 +322,22 @@ async function confirmCloseRunningCodex(installation) {
     message: `${installation.label}正在运行，是否关闭并继续？`,
     detail: `将只关闭下面路径对应的 Codex 进程，然后以调试模式重新启动并自动完成快速流式注入。请先保存尚未发送的输入。\n\n${installation.path}\n\n已发现进程：${processCount} 个`,
     buttons: ["关闭并继续", "取消"],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  });
+  return result.response === 0;
+}
+
+async function confirmLaunchSeparateCodex(installation, runningInstallations) {
+  assertNotQuitting();
+  const runningDetails = runningInstallations.map(({ label, path: executablePath }) => `${label}\n${executablePath}`).join("\n\n");
+  const result = await dialog.showMessageBox(mainWindow, {
+    type: "warning",
+    title: "将启动另一版本的 Codex",
+    message: "所选 Codex 与正在运行的版本不同，是否另开窗口？",
+    detail: `正在运行（不会关闭）：\n${runningDetails}\n\n即将启动：\n${installation.label}\n${installation.path}\n\n继续会使用独立调试配置打开新窗口，壁纸将应用到新窗口，不会应用到原有窗口。若要给原有版本应用壁纸，请取消并在工作台顶部选择对应版本。`,
+    buttons: ["另开所选版本", "取消"],
     defaultId: 1,
     cancelId: 1,
     noLink: true,
@@ -268,7 +367,7 @@ function createMainWindow() {
     if (url !== rendererUrl) event.preventDefault();
   });
   window.once("ready-to-show", () => window.show());
-  window.loadFile(rendererPath);
+  window.loadURL(rendererUrl);
   const hideToTray = (event) => {
     if (isQuitting) return;
     event.preventDefault();
@@ -303,11 +402,37 @@ function sendTrayAction(action) {
   }
 }
 
-async function closePreview() {
-  if (previewProcess && !previewProcess.killed) previewProcess.kill();
-  previewProcess = null;
-  previewUrl = null;
-  previewPort = null;
+function assertNotQuitting() {
+  if (shutdownRequested) throw new Error("正在退出，不能启动新的壁纸操作");
+}
+
+async function verifySelectedOwner(installation, port) {
+  assertNotQuitting();
+  const expected = acceptanceContext?.expectedHost;
+  if (acceptanceContext && (!expected || port !== expected.port
+    || path.win32.normalize(installation.path).toLowerCase() !== path.win32.normalize(expected.exe).toLowerCase())) {
+    throw new Error("独立验收只允许 target.json 指定的测试宿主和端口");
+  }
+  const key = JSON.stringify([installation.id, path.win32.normalize(installation.path).toLowerCase(), port]);
+  // Coalesce overlapping identical queries only. A settled promise is removed,
+  // so reconnects and subsequent operations can never inherit stale ownership.
+  if (pendingOwnerCheck?.key === key) return pendingOwnerCheck.promise;
+  const record = { key, promise: null };
+  record.promise = Promise.resolve().then(() => verifyCdpEndpointOwner({
+    installation, port,
+    ...(expected ? { expectedProcess: { pid: expected.pid, creation: expected.creation, profile: expected.profile } } : {}),
+  })).then((result) => {
+    assertNotQuitting();
+    verifiedEndpointInstallation = { port, installation: { id: installation.id, path: installation.path } };
+    return result;
+  }).catch((error) => {
+    verifiedEndpointInstallation = null;
+    throw error;
+  }).finally(() => {
+    if (pendingOwnerCheck === record) pendingOwnerCheck = null;
+  });
+  pendingOwnerCheck = record;
+  return record.promise;
 }
 
 function assertTrustedControlUrl(rawUrl) {
@@ -319,31 +444,8 @@ function assertTrustedControlUrl(rawUrl) {
 }
 
 async function ensureControlPanel(port) {
-  const normalizedPort = validateCdpPort(port);
-  if (previewProcess && !previewProcess.killed && previewUrl && previewPort === normalizedPort) {
-    return { url: previewUrl, reused: true };
-  }
-  await closePreview();
-
-  const preview = await startBridgePreview({
-    executablePath: process.execPath,
-    bridgeRoot,
-    port: normalizedPort,
-    onLog: log,
-    processFactory: forkBridgeUtility,
-  });
-  previewProcess = preview.child;
-  previewUrl = assertTrustedControlUrl(preview.url);
-  previewPort = normalizedPort;
-  const activeProcess = previewProcess;
-  activeProcess.once("exit", () => {
-    if (previewProcess !== activeProcess) return;
-    previewProcess = null;
-    previewUrl = null;
-    previewPort = null;
-    mainWindow?.webContents.send("cwb:tray-action", "control-disconnected");
-  });
-  return { url: previewUrl, reused: false };
+  assertNotQuitting();
+  return previewSession.ensure(validateCdpPort(port));
 }
 
 function createApplicationTray() {
@@ -394,30 +496,48 @@ function registerIpcHandlers() {
     return currentState();
   });
   registerHandler("cwb:apply-codex", ({ installationId, port, adaptive = true } = {}) => runOperation("应用到 Codex", async () => {
+    const operationStartedAt = performance.now();
+    let completed = false;
     try {
       await rememberOperationSettings({ port, adaptive });
-      const installation = await resolveInstallation(installationId);
+      const snapshot = await measureStartupPhase("discovery", currentState);
+      const installation = await resolveInstallation(installationId, snapshot);
       const normalizedPort = validateCdpPort(port);
       const flow = await runLaunchAndInjectFlow({
         installation,
+        runningInstallations: snapshot.installations.filter(({ isRunning }) => isRunning),
         port: normalizedPort,
         adaptive: Boolean(adaptive),
-        isEndpointReady: isCdpEndpointReady,
+        onPhase: logStartupPhase,
+        isEndpointReady: async (selectedPort) => {
+          assertNotQuitting();
+          const ready = await isCdpEndpointReady(selectedPort);
+          if (acceptanceContext && !ready) throw new Error("独立验收只连接预先启动的测试实例，不启动或关闭 Codex");
+          return ready;
+        },
+        verifyEndpointOwner: verifySelectedOwner,
         confirmClose: confirmCloseRunningCodex,
-        closeCodex: (selected) => closeCodexProcesses({
-          installation: selected,
-          onLog: log,
-        }),
-        launchCodex: ({ installation: selected, port: selectedPort }) => launchCodex({
-          installation: selected,
-          port: selectedPort,
-          profileRoot: path.join(app.getPath("userData"), "codex-profiles"),
-          onLog: log,
-        }),
+        confirmLaunchSeparate: confirmLaunchSeparateCodex,
+        closeCodex: (selected) => {
+          assertNotQuitting();
+          if (acceptanceContext) throw new Error("独立验收不得关闭 Codex");
+          return closeCodexProcesses({ installation: selected, onLog: log });
+        },
+        launchCodex: ({ installation: selected, port: selectedPort }) => {
+          assertNotQuitting();
+          if (acceptanceContext) throw new Error("独立验收不得启动 Codex");
+          return launchCodex({
+            installation: selected,
+            port: selectedPort,
+            profileRoot: path.join(app.getPath("userData"), "codex-profiles"),
+            onLog: log,
+          });
+        },
         waitForTarget: waitForCodexTarget,
         injectOnce: injectOnceAtPort,
       });
       if (flow.canceled) return flow;
+      completed = true;
       return {
         result: flow.launch,
         compatibility: flow.injection.compatibility,
@@ -439,26 +559,18 @@ function registerIpcHandlers() {
         log({ stream: "stderr", text: `兼容诊断写入失败：${diagnosticError.message}\n` });
       }
       throw error;
+    } finally {
+      logStartupPhase({ phase: "total", elapsedMs: performance.now() - operationStartedAt, ok: completed });
     }
   }));
-  registerHandler("cwb:restore", ({ port } = {}) => runOperation("恢复官方外观", async () => {
+  registerHandler("cwb:restore", ({ installationId, port } = {}) => runOperation("恢复官方外观", async () => {
     await rememberOperationSettings({ port });
     const normalizedPort = validateCdpPort(port);
-    const warnings = [];
-    let compatibility = [];
-    try {
-      compatibility = await evaluateInCodexTargets(normalizedPort, buildCompatibilityRestoreScript());
-    } catch (error) {
-      warnings.push(`兼容层：${error.message}`);
-    }
-    try {
-      const control = await ensureControlPanel(normalizedPort);
-      await invokeBridgeAction({ controlUrl: control.url, action: "restore" });
-    } catch (error) {
-      warnings.push(`壁纸层：${error.message}`);
-    }
-    if (warnings.length === 2) throw new Error(warnings.join("；"));
-    return { compatibility, warnings };
+    const installation = await resolveInstallation(installationId || settings.selectedId);
+    await verifySelectedOwner(installation, normalizedPort);
+    assertNotQuitting();
+    const control = await ensureControlPanel(normalizedPort);
+    return invokeBridgeAction({ controlUrl: control.url, action: "restore" });
   }));
   registerHandler("cwb:open-control-panel", ({ port } = {}) => runOperation("载入壁纸面板", async () => {
     await rememberOperationSettings({ port });
@@ -472,8 +584,9 @@ if (!hasSingleInstanceLock) {
   app.on("second-instance", () => showMainWindow());
   app.whenReady().then(async () => {
     app.setAppUserModelId("com.local.codex-wallpaper-desktop");
+    await installDesktopRendererProtocol({ protocol, rendererRoot });
     settingsPath = path.join(app.getPath("userData"), "settings.json");
-    logsRoot = path.join(process.env.LOCALAPPDATA || app.getPath("userData"), "CodexWallpaperDesktop", "logs");
+    logsRoot = acceptanceContext?.logsRoot || path.join(process.env.LOCALAPPDATA || app.getPath("userData"), "CodexWallpaperDesktop", "logs");
     bridgeRoot = resolveBridgeRoot({
       isPackaged: app.isPackaged,
       appPath: app.getAppPath(),
@@ -489,9 +602,26 @@ if (!hasSingleInstanceLock) {
   });
 }
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
   isQuitting = true;
-  void closePreview();
+  shutdownRequested = true;
+  if (shutdownComplete) return;
+  event.preventDefault();
+  if (shutdownPromise) return;
+  shutdownPromise = previewSession.shutdown()
+    .then(() => nativeEngineHost?.close())
+    .then(() => logWriteQueue)
+    .then(() => {
+      shutdownComplete = true;
+      app.quit();
+    })
+    .catch((error) => {
+      shutdownPromise = null;
+      isQuitting = false;
+      log({ stream: "stderr", text: `退出清理失败：${error.message}\n` });
+      showMainWindow();
+      dialog.showErrorBox("退出清理未完成", "壁纸服务尚未确认退出，请稍后再次从托盘退出。详情见本地日志。");
+    });
 });
 
 app.on("will-quit", () => {

@@ -1,16 +1,18 @@
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import JavaScriptObfuscator from "javascript-obfuscator";
 import { build, transform } from "esbuild";
 import { assertChildPath } from "../src/package-layout.mjs";
-import { createObfuscationOptions } from "./obfuscation-policy.mjs";
+import { verifyWebWallglAssets } from "../bridge-runtime/src/scene-server.mjs";
+import { desktopMainBuildOptions } from "./desktop-main-build.mjs";
+import { compileWindowsMedia } from "./compile-windows-media.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const prototypeRoot = path.resolve(here, "..");
 const sourceRoot = path.join(prototypeRoot, "src");
 const bridgeRoot = path.join(prototypeRoot, "bridge-runtime");
 const distRoot = assertChildPath(prototypeRoot, path.join(prototypeRoot, "dist"));
+const buildStartedAt = performance.now();
 
 const nodeBuild = {
   bundle: true,
@@ -25,20 +27,6 @@ const nodeBuild = {
   treeShaking: true,
 };
 
-async function obfuscate(filePath, {
-  sourceType,
-  target,
-  preserveSerializedFunctions = false,
-}) {
-  const source = await readFile(filePath, "utf8");
-  const result = JavaScriptObfuscator.obfuscate(source, createObfuscationOptions({
-    sourceType,
-    target,
-    preserveSerializedFunctions,
-  }));
-  await writeFile(filePath, result.getObfuscatedCode(), "utf8");
-}
-
 async function minifyAsset(sourcePath, outputPath, loader) {
   const source = await readFile(sourcePath, "utf8");
   const result = await transform(source, {
@@ -52,21 +40,43 @@ async function minifyAsset(sourcePath, outputPath, loader) {
   await writeFile(outputPath, result.code, "utf8");
 }
 
+await verifyWebWallglAssets();
 await rm(distRoot, { recursive: true, force: true });
 await mkdir(path.join(distRoot, "renderer"), { recursive: true });
 await mkdir(path.join(distRoot, "bridge-runtime", "src"), { recursive: true });
 await mkdir(path.join(distRoot, "bridge-runtime", "public"), { recursive: true });
 
 await Promise.all([
-  build({
-    ...nodeBuild,
-    entryPoints: [path.join(sourceRoot, "main.mjs")],
-    outfile: path.join(distRoot, "main.mjs"),
-  }),
+  build(desktopMainBuildOptions({ sourceRoot, distRoot, base: nodeBuild })),
   build({
     ...nodeBuild,
     entryPoints: [path.join(sourceRoot, "bridge-utility-entry.mjs")],
     outfile: path.join(distRoot, "bridge-utility-entry.mjs"),
+  }),
+  build({
+    ...nodeBuild,
+    entryPoints: [path.join(bridgeRoot, "src", "scene-server.mjs")],
+    outfile: path.join(distRoot, "bridge-runtime", "src", "scene-server.mjs"),
+  }),
+  build({
+    ...nodeBuild,
+    entryPoints: [path.join(sourceRoot, "engine-renderer-owner.mjs")],
+    outfile: path.join(distRoot, "bridge-runtime", "src", "engine-renderer-owner.mjs"),
+  }),
+  build({
+    ...nodeBuild,
+    entryPoints: [path.join(sourceRoot, "engine-provider-rpc.mjs")],
+    outfile: path.join(distRoot, "bridge-runtime", "src", "engine-provider-rpc.mjs"),
+  }),
+  build({
+    ...nodeBuild,
+    entryPoints: [path.join(sourceRoot, "desktop-engine-host.mjs")],
+    outfile: path.join(distRoot, "bridge-runtime", "src", "desktop-engine-host.mjs"),
+  }),
+  build({
+    ...nodeBuild,
+    entryPoints: [path.join(bridgeRoot, "src", "native-engine-provider.mjs")],
+    outfile: path.join(distRoot, "bridge-runtime", "src", "native-engine-provider.mjs"),
   }),
   build({
     ...nodeBuild,
@@ -84,6 +94,12 @@ await Promise.all([
     format: "cjs",
     outfile: path.join(distRoot, "preload.cjs"),
   }),
+  ...[distRoot, path.join(distRoot, "bridge-runtime", "src")].map((directory) => build({
+    ...nodeBuild,
+    entryPoints: [path.join(sourceRoot, "engine-vp8-preload.cjs")],
+    format: "cjs",
+    outfile: path.join(directory, "engine-vp8-preload.cjs"),
+  })),
   build({
     bundle: true,
     entryPoints: [path.join(sourceRoot, "renderer", "renderer-desktop.mjs")],
@@ -120,32 +136,34 @@ await Promise.all([
     path.join(distRoot, "bridge-runtime", "public", "app.js"),
     "js",
   ),
+  minifyAsset(path.join(bridgeRoot, "public", "workbench-theme.js"),
+    path.join(distRoot, "bridge-runtime", "public", "workbench-theme.js"), "js"),
+  minifyAsset(
+    path.join(bridgeRoot, "public", "cwb-web-bridge.js"),
+    path.join(distRoot, "bridge-runtime", "public", "cwb-web-bridge.js"),
+    "js",
+  ),
+  minifyAsset(
+    path.join(bridgeRoot, "public", "cwb-verifier-probe.js"),
+    path.join(distRoot, "bridge-runtime", "public", "cwb-verifier-probe.js"),
+    "js",
+  ),
   minifyAsset(
     path.join(bridgeRoot, "public", "electron-host.js"),
     path.join(distRoot, "bridge-runtime", "public", "electron-host.js"),
     "js",
   ),
+  minifyAsset(path.join(bridgeRoot, "public", "media-switch.js"),
+    path.join(distRoot, "bridge-runtime", "public", "media-switch.js"), "js"),
+  minifyAsset(path.join(bridgeRoot, "public", "author-properties-panel.js"),
+    path.join(distRoot, "bridge-runtime", "public", "author-properties-panel.js"), "js"),
+  minifyAsset(path.join(bridgeRoot, "public", "workbench-scene-preview.js"),
+    path.join(distRoot, "bridge-runtime", "public", "workbench-scene-preview.js"), "js"),
+  minifyAsset(path.join(bridgeRoot, "public", "cwb-scene-bridge.js"),
+    path.join(distRoot, "bridge-runtime", "public", "cwb-scene-bridge.js"), "js"),
+  cp(path.join(bridgeRoot, "vendor"), path.join(distRoot, "bridge-runtime", "vendor"), { recursive: true }),
+  compileWindowsMedia({ nativeRoot: path.join(bridgeRoot, "native"), outputRoot: path.join(distRoot, "bridge-runtime", "native") }),
 ]);
 
-await Promise.all([
-  obfuscate(path.join(distRoot, "main.mjs"), { sourceType: "module", target: "node" }),
-  obfuscate(path.join(distRoot, "bridge-runtime", "src", "cli.mjs"), {
-    sourceType: "module",
-    target: "node",
-    preserveSerializedFunctions: true,
-  }),
-  obfuscate(path.join(distRoot, "renderer", "renderer-desktop.mjs"), {
-    sourceType: "module",
-    target: "browser-no-eval",
-  }),
-  obfuscate(path.join(distRoot, "bridge-runtime", "public", "app.js"), {
-    sourceType: "script",
-    target: "browser-no-eval",
-  }),
-  obfuscate(path.join(distRoot, "bridge-runtime", "public", "electron-host.js"), {
-    sourceType: "script",
-    target: "browser-no-eval",
-  }),
-]);
-
-console.log(`受保护应用已构建到 ${distRoot}`);
+console.log(`应用已构建到 ${distRoot}（普通压缩，不进行代码混淆）`);
+console.log(`[build-timing] ${JSON.stringify({ stage: "compile-assets", durationMs: Math.round(performance.now() - buildStartedAt), obfuscation: false })}`);

@@ -36,4 +36,9 @@ html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background:
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+:root[data-workbench-theme="light"] { color-scheme: light; }
+:root[data-workbench-theme="light"] :is(body,#controlFrame) { background: #edf3fa; }
+:root[data-workbench-theme="light"] .control-placeholder { color: #24374c; background: radial-gradient(circle at 18% 12%,#d9eafb,transparent 32rem),#edf3fa; }
+:root[data-workbench-theme="light"] .control-placeholder p { color: #5d7389; }
+:root[data-workbench-theme="light"] .control-placeholder__spinner { border-color: #c5dcf1; border-top-color: #6ba8dc; }
 @media (prefers-reduced-motion: reduce) { * { animation-duration: .01ms !important; } }

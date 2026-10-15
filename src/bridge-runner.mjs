@@ -30,7 +30,10 @@ export function buildBridgeArguments(command, port) {
 export async function invokeBridgeAction({
   controlUrl,
   action,
-  timeoutMs = 15_000,
+  adaptive,
+  // GPU Scene startup may use the shared slot's bounded 90s first-frame gate,
+  // plus one CSP document initialization. VP8 keeps its own provider deadline.
+  timeoutMs = action === "inject" || action === "retry-engine" ? 150_000 : action === "restore" ? 30_000 : 15_000,
 }) {
   const base = new URL(String(controlUrl || ""));
   if (
@@ -45,10 +48,13 @@ export async function invokeBridgeAction({
   if (typeof action !== "string" || !action.trim() || action.length > 100) {
     throw new Error("壁纸操作名称无效");
   }
+  if (adaptive !== undefined && typeof adaptive !== "boolean") {
+    throw new Error("兼容模式必须是布尔值");
+  }
   const response = await fetch(new URL("api/action", base), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action }),
+    body: JSON.stringify({ action, ...(adaptive === undefined ? {} : { adaptive }) }),
     signal: AbortSignal.timeout(timeoutMs),
   });
   const payload = await response.json().catch(() => null);
@@ -139,11 +145,15 @@ export async function startBridgePreview({
   port,
   onLog = () => {},
   processFactory,
+  onChild = () => {},
 }) {
   const cliPath = path.join(bridgeRoot, "src", "cli.mjs");
   await access(cliPath);
   const args = buildBridgeArguments("preview", port);
   const { child } = createBridgeProcess({ executablePath, bridgeRoot, args, processFactory });
+  // Register before asynchronous stdout/exit so startup failures can be cleaned
+  // by the same owner that will eventually reuse the resident service.
+  onChild(child);
   let output = "";
 
   const url = await new Promise((resolve, reject) => {

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   normalizeInstallations,
   parsePowerShellJson,
+  selectInstallationId,
   validateCdpPort,
 } from "../src/installations.mjs";
 
@@ -104,4 +105,23 @@ test("validateCdpPort accepts the supported range and rejects unsafe values", ()
   assert.throws(() => validateCdpPort(80), /1024/);
   assert.throws(() => validateCdpPort(65536), /65535/);
   assert.throws(() => validateCdpPort("9335;Remove-Item"), /整数/);
+});
+
+test("default selection prefers a running local installation over a stopped Store installation", () => {
+  const choices = [{ id: "store", isRunning: false }, { id: "local", isRunning: true }];
+  assert.equal(selectInstallationId(choices, null), "local");
+  assert.equal(selectInstallationId(choices, "removed"), "local");
+  assert.deepEqual(choices.map(({ id }) => id), ["store", "local"], "selection must not reorder discovery results");
+});
+
+test("a valid remembered selection is never silently changed to another running installation", () => {
+  const choices = [{ id: "store", isRunning: false }, { id: "local", isRunning: true }];
+  assert.equal(selectInstallationId(choices, "store"), "store");
+  assert.equal(selectInstallationId(choices, "local"), "local");
+});
+
+test("selection has deterministic fallbacks for no running installations, multiple running installations, and no installations", () => {
+  assert.equal(selectInstallationId([{ id: "store", isRunning: false }, { id: "local", isRunning: false }], null), "store");
+  assert.equal(selectInstallationId([{ id: "store", isRunning: true }, { id: "local", isRunning: true }], null), "store");
+  assert.equal(selectInstallationId([], "removed"), null);
 });

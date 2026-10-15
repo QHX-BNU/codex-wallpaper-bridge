@@ -6,6 +6,24 @@ const isOneShot = command === "inject" && process.argv.includes("--once");
 const originalLog = console.log.bind(console);
 const originalError = console.error.bind(console);
 let isExitScheduled = false;
+let shutdownRequested = false;
+
+function deliverShutdown() {
+  if (!shutdownRequested || process.listenerCount("SIGTERM") === 0) return;
+  shutdownRequested = false;
+  process.emit("SIGTERM");
+}
+
+// UtilityProcess.kill may terminate Windows before Node signal handlers run.
+// Only the owning Electron parent can use this narrow graceful-stop protocol.
+process.parentPort?.on("message", ({ data } = {}) => {
+  if (data?.channel !== "cwb-utility" || data?.action !== "shutdown") return;
+  shutdownRequested = true;
+  deliverShutdown();
+});
+process.on("newListener", (name) => {
+  if (name === "SIGTERM" && shutdownRequested) queueMicrotask(deliverShutdown);
+});
 
 function scheduleExit(code) {
   if (isExitScheduled) return;

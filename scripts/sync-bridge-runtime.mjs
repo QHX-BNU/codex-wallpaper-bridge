@@ -1,6 +1,7 @@
 import { access, cp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const prototypeRoot = path.resolve(here, "..");
@@ -26,6 +27,15 @@ for (const requiredPath of [
 }
 
 await cp(overridesRoot, targetRoot, { recursive: true, force: true });
+await build({ entryPoints: [path.join(targetRoot, "src", "media-switch.mjs")],
+  bundle: true, format: "iife", globalName: "cwbMedia", target: "chrome130",
+  outfile: path.join(targetRoot, "public", "media-switch.js"), logLevel: "silent" });
+await build({ entryPoints: [path.join(targetRoot, "src", "author-properties-panel.mjs")],
+  bundle: true, format: "iife", globalName: "cwbAuthorProperties", target: "chrome130",
+  outfile: path.join(targetRoot, "public", "author-properties-panel.js"), logLevel: "silent" });
+await build({ entryPoints: [path.join(targetRoot, "src", "workbench-scene-preview.mjs")],
+  bundle: true, format: "iife", globalName: "cwbScenePreview", target: "chrome130",
+  outfile: path.join(targetRoot, "public", "workbench-scene-preview.js"), logLevel: "silent" });
 
 const controlIndexPath = path.join(targetRoot, "public", "index.html");
 let controlIndex = await readFile(controlIndexPath, "utf8");

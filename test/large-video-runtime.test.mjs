@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { CdpWallpaperInjector } from "../bridge-runtime/src/cdp-injector.mjs";
+import { CdpWallpaperInjector } from "../bridge-overrides/src/cdp-injector.mjs";
 import { buildInjectionPlan } from "../bridge-runtime/src/injection-plan.mjs";
 import {
   buildApplyScript,
@@ -91,7 +91,7 @@ function fakeSession() {
 }
 
 test("standalone runtime sync applies the one-second streaming overrides", async () => {
-  for (const file of ["cdp-injector.mjs", "injected-renderer.mjs", "injection-plan.mjs"]) {
+  for (const file of ["cli.mjs", "cdp-injector.mjs", "injected-renderer.mjs", "injection-plan.mjs"]) {
     const [generated, override] = await Promise.all([
       readFile(path.join(prototypeRoot, "bridge-runtime", "src", file), "utf8"),
       readFile(path.join(prototypeRoot, "bridge-overrides", "src", file), "utf8"),
@@ -218,6 +218,26 @@ test("injector reloads and reapplies once when the official theme needs rehydrat
     method === "Runtime.evaluate" && params.expression.includes("runtime.apply")).length, 2);
 });
 
+test("a cached theme reload request is consumed once across repeated configuration applies", async () => {
+  const injector = new CdpWallpaperInjector();
+  const { session, calls } = fakeSession();
+  const originalCall = session.socket.call;
+  session.socket.call = async (method, params = {}) => {
+    const result = await originalCall(method, params);
+    if (method === "Runtime.evaluate" && params.expression.includes("runtime.apply")) {
+      result.result.value.theme = { reloadRequired: true };
+    }
+    return result;
+  };
+
+  await injector.installScript(session, injection());
+  await injector.installScript(session, injection());
+
+  assert.equal(calls.filter(({ method }) => method === "Page.reload").length, 1);
+  assert.equal(calls.filter(({ method, params }) =>
+    method === "Runtime.evaluate" && params.expression.includes("runtime.apply")).length, 3);
+});
+
 test("restore reloads Codex when returning to the original theme requires it", async () => {
   const injector = new CdpWallpaperInjector();
   const { session, calls } = fakeSession();
@@ -237,6 +257,7 @@ test("restore reloads Codex when returning to the original theme requires it", a
     return originalCall(method, params);
   };
   injector.sessions.set(session.target.id, session);
+  injector.listTargets = async () => [session.target];
 
   await injector.restore();
 
@@ -311,7 +332,7 @@ test("runtime switches to dark and restores the saved Codex appearance theme", (
   const bootstrap = buildBootstrapScript();
   const apply = buildApplyScript({ wallpaper: null });
   const restore = buildRestoreScript();
-  assert.match(bootstrap, /0\.4\.0-theme/);
+  assert.match(bootstrap, /0\.6\.0-m3-media-policy-v2/);
   assert.match(bootstrap, /vscode:\/\/codex\/\$\{operation\}/);
   assert.match(bootstrap, /get-setting/);
   assert.match(bootstrap, /set-setting/);

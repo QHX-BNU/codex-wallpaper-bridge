@@ -114,6 +114,11 @@ export function validateCdpPort(value) {
   return port;
 }
 
+export function selectInstallationId(installations, selectedId) {
+  if (installations.some(({ id }) => id === selectedId)) return selectedId;
+  return installations.find(({ isRunning }) => isRunning)?.id || installations[0]?.id || null;
+}
+
 export function normalizeInstallations({
   storePackages = [],
   localInstallations = [],

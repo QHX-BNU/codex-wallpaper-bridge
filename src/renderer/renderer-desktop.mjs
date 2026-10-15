@@ -2,6 +2,12 @@ const api = window.cwbDesktop;
 const CONTROL_CHANNEL = "cwb-control";
 const CONTROL_READY_TIMEOUT_MS = 10_000;
 const CONTROL_FLUSH_TIMEOUT_MS = 7_000;
+const WORKBENCH_THEME_KEY = "cwb.workbench.theme";
+
+function savedWorkbenchTheme() {
+  try { return window.localStorage.getItem(WORKBENCH_THEME_KEY) === "light" ? "light" : "dark"; }
+  catch { return "dark"; }
+}
 const elements = {
   controlFrame: document.querySelector("#controlFrame"),
   controlPlaceholder: document.querySelector("#controlPlaceholder"),
@@ -20,7 +26,16 @@ const state = {
   controlLoadPromise: null,
   requestSequence: 0,
   flushRequests: new Map(),
+  workbenchTheme: savedWorkbenchTheme(),
 };
+
+function applyWorkbenchTheme(theme) {
+  if (theme !== "light" && theme !== "dark") return;
+  state.workbenchTheme = theme;
+  if (document.documentElement) document.documentElement.dataset.workbenchTheme = theme;
+  try { window.localStorage.setItem(WORKBENCH_THEME_KEY, theme); } catch { /* Theme still works for this session. */ }
+}
+applyWorkbenchTheme(state.workbenchTheme);
 
 function delay(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -57,6 +72,7 @@ function desktopPayload() {
     busy: state.busy,
     feedback: state.feedback,
     feedbackTone: state.feedbackTone,
+    workbenchTheme: state.workbenchTheme,
   };
 }
 
@@ -87,13 +103,16 @@ function setFeedback(message, tone = "idle") {
 }
 
 function loadControlFrame(url, forceReload = false) {
+  const themedUrl = new URL(url);
+  themedUrl.searchParams.set("workbenchTheme", state.workbenchTheme);
+  const frameUrl = themedUrl.href;
   state.controlReady = false;
   showPlaceholder("正在连接壁纸工作台", "配置、Codex 目标和应用操作都将在同一页完成。");
-  if (forceReload && elements.controlFrame.src === url) {
+  if (forceReload && elements.controlFrame.src === frameUrl) {
     elements.controlFrame.src = "about:blank";
-    window.setTimeout(() => { elements.controlFrame.src = url; }, 0);
+    window.setTimeout(() => { elements.controlFrame.src = frameUrl; }, 0);
   } else {
-    elements.controlFrame.src = url;
+    elements.controlFrame.src = frameUrl;
   }
 }
 
@@ -158,7 +177,7 @@ async function applyCodex(payload = {}) {
   await flushControlSettings();
   setFeedback("正在应用到 Codex…", "busy");
   const result = await api.applyCodex({ installationId: selectedId, port: selectedPort, adaptive });
-  if (result?.canceled) setFeedback("已取消，Codex 未被关闭", "idle");
+  if (result?.canceled) setFeedback(result.message || "已取消，Codex 未被关闭", "idle");
   else if (result?.ok) setFeedback(result.message || "已应用到 Codex", "success");
   else setFeedback(result?.message || "应用失败，详情已写入本地日志", "error");
 
@@ -171,7 +190,7 @@ async function applyCodex(payload = {}) {
 async function restoreOfficialAppearance(payload = {}) {
   const selectedPort = normalizePort(payload.port ?? state.port);
   setFeedback("正在恢复官方外观…", "busy");
-  const result = await api.restore({ port: selectedPort });
+  const result = await api.restore({ installationId: payload.installationId || state.selectedId, port: selectedPort });
   if (result?.ok) setFeedback("已恢复官方外观", "success");
   else setFeedback(result?.message || "恢复失败，详情已写入本地日志", "error");
   return result;
@@ -199,8 +218,8 @@ async function executeDesktopAction(action, payload = {}) {
       setFeedback("本地 EXE 列表已更新", "success");
       return { ok: true, ...result };
     }
-    if (action === "apply") return applyCodex(payload);
-    if (action === "restore") return restoreOfficialAppearance(payload);
+    if (action === "apply") return await applyCodex(payload);
+    if (action === "restore") return await restoreOfficialAppearance(payload);
     throw new Error(`不支持的桌面操作：${action}`);
   } catch (error) {
     setFeedback(error.message || "操作失败，详情已写入本地日志", "error");
@@ -220,6 +239,13 @@ window.addEventListener("message", (event) => {
   const message = event.data;
   if (event.source !== elements.controlFrame.contentWindow || message?.channel !== CONTROL_CHANNEL) return;
   if (state.controlUrl && event.origin !== new URL(state.controlUrl).origin) return;
+
+  if (message.type === "workbench-theme" && state.controlUrl) {
+    if (message.theme !== "light" && message.theme !== "dark") return;
+    applyWorkbenchTheme(message.theme);
+    // A UI preference must not redraw/reset unsaved Codex target or port controls.
+    return;
+  }
 
   if (message.type === "ready") {
     state.controlReady = true;

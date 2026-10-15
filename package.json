@@ -1,9 +1,9 @@
 {
   "name": "codex-wallpaper-desktop",
-  "version": "0.6.0-alpha.2",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Experimental one-second streaming injector for Codex Wallpaper Bridge.",
+  "description": "Windows wallpaper workbench for Codex Desktop.",
   "main": "dist/main.mjs",
   "scripts": {
     "sync:bridge": "node scripts/sync-bridge-runtime.mjs",
@@ -25,8 +25,7 @@
     "@electron/asar": "4.3.0",
     "electron": "44.1.1",
     "electron-builder": "26.15.3",
-    "esbuild": "0.28.2",
-    "javascript-obfuscator": "5.6.0"
+    "esbuild": "0.28.2"
   },
   "build": {
     "appId": "com.local.codex-wallpaper-desktop",

@@ -61,6 +61,55 @@ test("preview URL is parsed from Chinese bridge output", () => {
   assert.equal(parseControlUrl(output), "http://127.0.0.1:43100/token/");
 });
 
+test("resident injection forwards only a validated adaptive boolean, never arbitrary scripts", async (context) => {
+  const received = [];
+  context.mock.method(globalThis, "fetch", async (url, options) => {
+    received.push(JSON.parse(options.body));
+    return { ok: true, json: async () => ({ ok: true }) };
+  });
+  const controlUrl = "http://127.0.0.1:43123/1234567890abcdef1234567890abcdef/";
+  await invokeBridgeAction({ controlUrl, action: "inject", adaptive: false, compatibilityScript: "untrusted-script" });
+  await invokeBridgeAction({ controlUrl, action: "inject", adaptive: true });
+  await invokeBridgeAction({ controlUrl, action: "restore" });
+  assert.deepEqual(received, [
+    { action: "inject", adaptive: false },
+    { action: "inject", adaptive: true },
+    { action: "restore" },
+  ]);
+  await assert.rejects(invokeBridgeAction({ controlUrl, action: "inject", adaptive: "false" }), /兼容模式必须是布尔值/);
+  assert.equal(received.length, 3);
+});
+
+test("scene inject/retry and restore have bounded startup/cleanup deadlines while other actions and explicit overrides stay independent", async (context) => {
+  const deadlines = [];
+  context.mock.method(AbortSignal, "timeout", (timeoutMs) => {
+    deadlines.push(timeoutMs);
+    return new AbortController().signal;
+  });
+  context.mock.method(globalThis, "fetch", async () => ({ ok: true, json: async () => ({ ok: true }) }));
+  const controlUrl = "http://127.0.0.1:43123/1234567890abcdef1234567890abcdef/";
+  await invokeBridgeAction({ controlUrl, action: "inject" });
+  await invokeBridgeAction({ controlUrl, action: "retry-engine" });
+  await invokeBridgeAction({ controlUrl, action: "restore" });
+  await invokeBridgeAction({ controlUrl, action: "pause" });
+  await invokeBridgeAction({ controlUrl, action: "inject", timeoutMs: 50 });
+  assert.deepEqual(deadlines, [150_000, 150_000, 30_000, 15_000, 50]);
+});
+
+test("native inject still propagates server verification failures and explicit deadline aborts", async (context) => {
+  const controlUrl = "http://127.0.0.1:43123/1234567890abcdef1234567890abcdef/";
+  context.mock.method(globalThis, "fetch", async () => ({ ok: false, status: 500,
+    json: async () => ({ ok: false, error: "renderer verification failed" }) }));
+  await assert.rejects(invokeBridgeAction({ controlUrl, action: "inject" }), /renderer verification failed/);
+  context.mock.method(globalThis, "fetch", async (_url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  }));
+  const keepAlive = setTimeout(() => {}, 100);
+  context.after(() => clearTimeout(keepAlive));
+  await assert.rejects(invokeBridgeAction({ controlUrl, action: "inject", timeoutMs: 5 }),
+    (error) => error.name === "TimeoutError");
+});
+
 test("ANSI status colors are removed before logs enter the renderer", () => {
   assert.equal(stripAnsi("\u001b[32m完成\u001b[0m"), "完成");
 });

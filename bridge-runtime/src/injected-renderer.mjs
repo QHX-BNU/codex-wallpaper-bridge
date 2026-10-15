@@ -1,12 +1,29 @@
+import { createMediaSwitcher, runMediaTransition } from "../../bridge-runtime/src/media-switch.mjs";
+import { createEngineMediaTransport } from "../../bridge-runtime/src/engine-media-transport.mjs";
+import { createDirectSceneTransport } from "../../bridge-runtime/src/direct-scene-transport.mjs";
+import { createScenePreviewSlot } from "../../bridge-runtime/src/workbench-scene-preview.mjs";
+import { readAuthorProperties, validateAuthorPropertyPatch } from "../../bridge-runtime/src/author-properties.mjs";
+import { validateWebWallpaperInput } from "../../bridge-runtime/src/web-wallpaper-input.mjs";
+import { resolvePlayback } from "../../bridge-runtime/src/playback-policy.mjs";
+
 const GLOBAL_KEY = "__codexWallpaperBridgeRuntime";
 
 function safePayload(payload) {
   return JSON.stringify(payload ?? {}).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 }
 
-function rendererBootstrap() {
+async function rendererBootstrap(createMediaSwitcher, runMediaTransition, createEngineMediaTransport,
+  createDirectSceneTransport, createScenePreviewSlot, readAuthorProperties, validateAuthorPropertyPatch, validateWebWallpaperInput,
+  resolvePlayback, nativeEnabled = false, directSceneEnabled = false) {
+    // Page.addScriptToEvaluateOnNewDocument also runs in child frames. Author
+    // origins must never receive the Codex bootstrap or its host capabilities.
+    if (typeof location !== "undefined" && (location.origin !== "app://-" || globalThis.parent !== globalThis)) {
+      return { ok: false, ready: false, version: null };
+    }
     const KEY = "__codexWallpaperBridgeRuntime";
-    const VERSION = "0.4.0-theme";
+    const VERSION = "0.6.0-m3-media-policy-v2";
+    let nativeController = null;
+    let sceneController = null;
 
     const createRuntime = () => {
       const ids = {
@@ -16,11 +33,15 @@ function rendererBootstrap() {
         style: "codex-wallpaper-bridge-style"
       };
       let current = null;
+      const nativeMedia = nativeEnabled && !directSceneEnabled ? createEngineMediaTransport(resolvePlayback) : null;
+      const sceneMedia = directSceneEnabled ? createDirectSceneTransport(createScenePreviewSlot, readAuthorProperties, validateAuthorPropertyPatch, validateWebWallpaperInput, resolvePlayback) : null;
+      if (nativeMedia) nativeController = { accept: nativeMedia.accept, fail: nativeMedia.fail, state: nativeMedia.state, retry: nativeMedia.retry, close: nativeMedia.close };
       let observer = null;
       let visibilityHandler = null;
       let currentMediaIdentity = null;
+      let scenePreload = null;
+      let lastMediaOperation = Promise.resolve({ ok: true });
       let mediaState = { state: "idle", at: performance.now() };
-      let mediaMessageHandler = null;
       const shellInlineState = new Map();
       const themeStorageKey = "__codexWallpaperBridgeOriginalThemeV1";
       const allowedThemes = new Set(["system", "light", "dark"]);
@@ -336,6 +357,7 @@ function rendererBootstrap() {
         }
       };
 
+      let power = { onBattery: false };
       const defaults = {
         fit: "cover",
         position: "50% 50%",
@@ -364,7 +386,20 @@ function rendererBootstrap() {
         glassOpacity: number(value.glassOpacity, defaults.glassOpacity, 0, 100),
         glassBlur: number(value.glassBlur, defaults.glassBlur, 0, 60),
         pauseWhenHidden: value.pauseWhenHidden !== false,
-        playing: value.playing !== false
+        pauseOnBattery: value.pauseOnBattery === true,
+        onBattery: power.onBattery,
+        playing: value.playing !== false,
+        zoom: number(value.zoom, 100, 50, 300),
+        playbackRate: number(value.playbackRate, 1, .25, 4),
+        mirror: value.mirror === true,
+        audioEnabled: value.audioEnabled === true,
+        volume: number(value.volume, 50, 0, 100),
+        contrast: number(value.contrast, 100, 0, 240),
+        opacity: number(value.opacity, 100, 0, 100),
+        transition: ["cut", "fade", "push", "wipe", "iris", "zoom", "stripes"].includes(value.transition) ? value.transition : "cut",
+        transitionDirection: ["left", "right", "up", "down"].includes(value.transitionDirection) ? value.transitionDirection : "left",
+        transitionDurationMs: number(value.transitionDurationMs, 600, 100, 3000),
+        reduceMotion: value.reduceMotion === true
       });
 
       const ensureStyle = () => {
@@ -409,7 +444,7 @@ function rendererBootstrap() {
               contain: strict;
               background: #0d1119;
             }
-            #${ids.media} {
+            #${ids.root} > iframe {
               position: absolute;
               inset: -2.5%;
               width: 105%;
@@ -417,9 +452,15 @@ function rendererBootstrap() {
               max-width: none;
               object-fit: var(--cwb-fit, cover);
               object-position: var(--cwb-position, 50% 50%);
-              filter: brightness(var(--cwb-brightness, .82)) saturate(var(--cwb-saturation, 1.05)) blur(var(--cwb-blur, 0px));
+              filter: brightness(var(--cwb-brightness, .82)) saturate(var(--cwb-saturation, 1.05)) contrast(var(--cwb-contrast, 1)) blur(var(--cwb-blur, 0px));
+              opacity: var(--cwb-opacity, 1);
               transform: translateZ(0);
               border: 0;
+              pointer-events: none;
+            }
+            #${ids.root} > [data-cwb-native], #${ids.root} > video, #${ids.root} > img {
+              filter: brightness(var(--cwb-brightness, .82)) saturate(var(--cwb-saturation, 1.05)) contrast(var(--cwb-contrast, 1)) blur(var(--cwb-blur, 0px));
+              opacity: var(--cwb-opacity, 1);
               pointer-events: none;
             }
             #${ids.scrim} {
@@ -630,71 +671,116 @@ function rendererBootstrap() {
       };
 
       const releaseMedia = () => {
-        const media = document.getElementById(ids.media);
-        if (media) {
-          const innerMedia = media.tagName === "IFRAME"
-            ? media.contentDocument?.getElementById("cwb-media")
-            : media;
-          try { innerMedia?.pause?.(); } catch {}
-          try { innerMedia?.removeAttribute?.("src"); } catch {}
-          try { innerMedia?.load?.(); } catch {}
-          if (media.tagName === "IFRAME") {
-            media.srcdoc = "";
-            media.src = "about:blank";
-          }
-          media.remove();
-        }
-        if (mediaMessageHandler) removeEventListener("message", mediaMessageHandler);
-        mediaMessageHandler = null;
+        scenePreload = null;
+        mediaSwitcher.clear();
         currentMediaIdentity = null;
         updateMediaState("idle");
       };
 
-      const mountMedia = (wallpaper) => {
+      const createMedia = ({ wallpaper, effects }, { revision, initial }) => {
         const root = ensureRoot();
-        if (!root) return;
-        const identity = wallpaper ? JSON.stringify([
-          wallpaper.id || null,
-          wallpaper.type || null,
-          wallpaper.playable || null,
-          wallpaper.mediaUrl || null,
-          wallpaper.previewUrl || null,
-          wallpaper.webUrl || null
-        ]) : null;
-        const existing = document.getElementById(ids.media);
-        if (
-          identity && identity === currentMediaIdentity &&
-          existing?.tagName === "IFRAME" && existing.dataset.cwbMediaIdentity === identity
-        ) return;
-        releaseMedia();
-        if (!wallpaper) return;
-
+        if (!root) throw new Error("Media root unavailable");
+        if (wallpaper.playable === "native") {
+          if (!nativeMedia) throw new Error("Native media provider unavailable");
+          const slot = nativeMedia.create({ wallpaper, effects });
+          slot.node.id = initial ? ids.media : `${ids.media}-pending-${revision}`;
+          root.insertBefore(slot.node, document.getElementById(ids.scrim));
+          return slot;
+        }
+        if (wallpaper.playable === "direct-gpu") {
+          if (!sceneMedia) throw new Error("GPU Scene provider unavailable");
+          const slot = sceneMedia.create({ wallpaper, effects });
+          slot.node.id = initial ? ids.media : `${ids.media}-pending-${revision}`;
+          root.insertBefore(slot.node, document.getElementById(ids.scrim));
+          return slot;
+        }
         const kind = (wallpaper.playable === "video" || wallpaper.type === "video")
           ? "video"
           : ((wallpaper.playable === "web" || wallpaper.type === "web") ? "web" : "image");
         const source = kind === "web"
           ? (wallpaper.webUrl || wallpaper.mediaUrl || "")
           : (wallpaper.mediaUrl || wallpaper.previewUrl || wallpaper.url || "");
+        // Owned-native mode keeps official CSP intact. Ordinary media uses native
+        // DOM elements, not executable srcdoc/loopback author iframes.
+        if ((nativeEnabled || directSceneEnabled) && kind !== "web") {
+          const media = document.createElement(kind === "video" ? "video" : "img");
+          media.id = initial ? ids.media : `${ids.media}-pending-${revision}`; media.style.opacity = "0";
+          media.style.cssText += ";position:absolute;inset:0;width:100%;height:100%;border:0";
+          let resolveReady, rejectReady, committed = false;
+          const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+          const update = ({ effects: value }) => {
+            media.style.objectFit = value.fit; media.style.objectPosition = value.position;
+            media.style.transform = "scale(" + (value.zoom / 100) + ") scaleX(" + (value.mirror ? -1 : 1) + ")";
+            media.style.transformOrigin = value.position;
+            if (kind === "video") {
+              media.playbackRate = value.playbackRate; media.volume = value.volume / 100;
+              media.muted = !committed || !value.audioEnabled;
+              if (!resolvePlayback(value, { hidden: document.hidden === true }).playing) {
+                media.pause();
+                if (media.readyState >= 2 && media.videoWidth > 0) resolveReady();
+              }
+              else void media.play().catch(() => updateMediaState("play-rejected", "autoplay blocked"));
+            }
+          };
+          media.addEventListener("error", () => rejectReady(new Error("Media decode failed")), { once: true });
+          if (kind === "video") {
+            media.loop = true; media.muted = true; media.playsInline = true; media.preload = "auto";
+            if (wallpaper.previewUrl) media.poster = wallpaper.previewUrl;
+            media.addEventListener("loadeddata", () => {
+              // A policy-paused video has decoded data but Chromium need not
+              // composite it while hidden/on battery. Do not wait for a frame
+              // callback that cannot fire; visible playback still requires it.
+              if (media.requestVideoFrameCallback && !media.paused && resolvePlayback(effects, { hidden: document.hidden === true }).playing) media.requestVideoFrameCallback(resolveReady);
+              else if (media.videoWidth > 0) resolveReady();
+            }, { once: true });
+          } else media.addEventListener("load", () => media.decode().then(resolveReady, rejectReady), { once: true });
+          root.insertBefore(media, document.getElementById(ids.scrim)); media.src = source; update({ effects });
+          return { node: media, ready, update,
+            activate() { committed = true; media.style.removeProperty("opacity"); update({ effects: current.effects }); },
+            retire() { committed = false; if (kind === "video") { media.muted = true; media.pause(); } },
+            release() { committed = false; if (kind === "video") media.pause(); media.removeAttribute("src"); media.load?.(); media.remove(); } };
+        }
         const framePayload = JSON.stringify({
           kind,
           source,
           poster: wallpaper.previewUrl || "",
-          playing: current?.effects?.playing !== false,
-          fit: current?.effects?.fit || "cover",
-          position: current?.effects?.position || "50% 50%"
+          playing: resolvePlayback(effects, { hidden: document.hidden === true }).playing,
+          fit: effects.fit,
+          position: effects.position,
+          effects: { ...effects, audioEnabled: false }
         }).replace(/</g, "\\u003c");
         const media = document.createElement("iframe");
-        media.id = ids.media;
-        media.dataset.cwbMediaIdentity = identity;
+        media.id = initial ? ids.media : `${ids.media}-pending-${revision}`;
+        media.style.opacity = "0";
         media.title = "Codex wallpaper media";
         media.referrerPolicy = "no-referrer";
+        media.allow = "autoplay";
+        let readyResolve, readyReject;
+        const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
+        let committed = false;
+        const update = (value) => {
+          const e = value.effects;
+          media.contentWindow?.postMessage({ channel: "cwb-media-control",
+            action: resolvePlayback(e, { hidden: document.hidden === true }).playing ? "play" : "pause",
+            fit: e.fit, position: e.position, effects: { ...e, audioEnabled: committed && e.audioEnabled } }, "*");
+        };
         media.srcdoc = `<!doctype html><meta charset="utf-8"><style>
           html,body,#mount,#cwb-media{margin:0;width:100%;height:100%;overflow:hidden;background:#0d1119}
           #cwb-media{display:block;border:0;object-fit:cover}
         </style><div id="mount"></div><script>(()=>{
           const config=${framePayload};
           const report=(event, detail=null)=>parent.postMessage({channel:"cwb-media-frame",event,detail},"*");
-          let media;
+          let media, readyReported=false;
+          const firstFrame=()=>{if(!readyReported){readyReported=true;report("ready");}};
+          const updateEffects=(effects)=>{
+            media.style.transform="scale("+((effects.zoom??100)/100)+") scaleX("+(effects.mirror?-1:1)+")";
+            media.style.transformOrigin=effects.position||config.position;
+            if(config.kind==="video"){
+              media.playbackRate=effects.playbackRate??1;
+              media.volume=(effects.volume??50)/100;
+              media.muted=effects.audioEnabled!==true;
+            }
+          };
           if(config.kind==="video"){
             media=document.createElement("video");
             media.muted=true;media.loop=true;media.autoplay=config.playing;media.playsInline=true;media.preload="auto";
@@ -703,49 +789,120 @@ function rendererBootstrap() {
               media.addEventListener(event,()=>report(event),{passive:true});
             }
             media.addEventListener("error",()=>report("error",media.error?.message||"media error"),{passive:true});
+            media.addEventListener("loadeddata",()=>{
+              if(media.requestVideoFrameCallback&&!media.paused)media.requestVideoFrameCallback(firstFrame);
+              else if(media.videoWidth>0)firstFrame();
+            },{once:true});
           }else if(config.kind==="web"){
             media=document.createElement("iframe");
             media.sandbox="allow-scripts";media.referrerPolicy="no-referrer";
-            media.addEventListener("load",()=>report("loaded"),{once:true});
+            media.addEventListener("load",firstFrame,{once:true});
           }else{
             media=document.createElement("img");media.alt="";media.decoding="async";
-            media.addEventListener("load",()=>report("loaded"),{once:true});
+            media.addEventListener("load",()=>media.decode().then(firstFrame,()=>report("error","image decode")),{once:true});
             media.addEventListener("error",()=>report("error","image error"),{once:true});
           }
           media.id="cwb-media";media.style.objectFit=config.fit;media.style.objectPosition=config.position;
+          updateEffects(config.effects);
           media.src=config.source;document.getElementById("mount").append(media);
           addEventListener("message",event=>{
             if(event.source!==parent||event.data?.channel!=="cwb-media-control")return;
             if(event.data.fit)media.style.objectFit=event.data.fit;
             if(event.data.position)media.style.objectPosition=event.data.position;
-            if(event.data.action==="play")media.play?.().catch(()=>{});
-            if(event.data.action==="pause")media.pause?.();
+            updateEffects(event.data.effects||config.effects);
+            if(event.data.action==="play")media.play?.().catch(error=>report("play-rejected",error.name||"autoplay blocked"));
+            if(event.data.action==="pause"){
+              media.pause?.();
+              if(media.readyState>=2&&media.videoWidth>0)firstFrame();
+            }
           });
-          if(config.kind==="video"&&config.playing)media.play().catch(error=>report("play-rejected",error.message));
+          if(config.kind==="video"&&config.playing)media.play().catch(error=>report("play-rejected",error.name||"autoplay blocked"));
         })()<\/script>`;
-        mediaMessageHandler = (event) => {
+        const handler = (event) => {
           if (event.source !== media.contentWindow || event.data?.channel !== "cwb-media-frame") return;
-          updateMediaState(event.data.event || "unknown", event.data.detail || null);
+          if (event.data.event === "ready") readyResolve();
+          if (event.data.event === "error") readyReject(new Error("Media decode failed"));
+          if (committed) updateMediaState(event.data.event || "unknown", event.data.event === "play-rejected" ? "autoplay blocked" : null);
         };
-        addEventListener("message", mediaMessageHandler);
-        updateMediaState("loading");
+        addEventListener("message", handler);
         root.insertBefore(media, document.getElementById(ids.scrim));
-        currentMediaIdentity = identity;
+        return { node: media, ready, wallpaperId: wallpaper.id, update,
+          activate() { committed = true; media.style.removeProperty("opacity"); update({ effects: current.effects }); },
+          retire() { committed = false; update({ effects: current.effects }); },
+          release() { removeEventListener("message", handler); media.srcdoc = ""; media.src = "about:blank"; media.remove(); } };
+      };
+
+      const mediaSwitcher = createMediaSwitcher({ create: createMedia,
+        commit(slot, before) {
+          // An activation failure must not retire or rename the old slot.
+          slot.activate();
+          if (before) { before.node.id = `${ids.media}-retired`; before.retire(); }
+          slot.node.id = ids.media;
+          currentMediaIdentity = slot.identity;
+          updateMediaState("ready");
+        }, dispose: (slot) => slot?.release(), transition: runMediaTransition, timeoutMs: nativeEnabled ? 15000 : 5000 });
+      const mediaIdentity = (wallpaper) => wallpaper?.playable === "direct-gpu"
+        ? JSON.stringify([wallpaper.id, wallpaper.type || "scene", "direct-gpu"])
+        : JSON.stringify([wallpaper?.id, wallpaper?.type, wallpaper?.playable, wallpaper?.mediaUrl, wallpaper?.previewUrl, wallpaper?.webUrl]);
+      const cancelScenePreload = (leaseHandle) => {
+        if (!scenePreload || (leaseHandle && scenePreload.leaseHandle !== leaseHandle)) return false;
+        const pending = scenePreload; scenePreload = null;
+        if (mediaSwitcher.status().requestedIdentity === pending.identity) mediaSwitcher.cancel();
+        return true;
+      };
+      const preloadScene = (leaseHandle, key) => {
+        if (!sceneMedia || !current || !document.getElementById(ids.root)
+          || typeof key !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(key)
+          || sceneMedia.key(leaseHandle) !== key || current.wallpaper?.id === key) return { started: false };
+        const status = mediaSwitcher.status();
+        // Never interrupt an actual user switch or truncate its ongoing fade.
+        if (status.transitioning || (status.requestedIdentity && status.requestedIdentity !== scenePreload?.identity)) {
+          return { started: false, busy: true };
+        }
+        if (scenePreload?.key === key) return { started: true, reused: true };
+        cancelScenePreload();
+        const wallpaper = { id: key, type: "scene", playable: "direct-gpu" };
+        const identity = mediaIdentity(wallpaper);
+        const handle = mediaSwitcher.prepare({ wallpaper, effects: current.effects }, identity, { loadTimeoutMs: 90000 });
+        scenePreload = { key, identity, handle, leaseHandle };
+        // This call returns before first-frame readiness. Actual apply can adopt
+        // the handle while loading; speculation never holds the CDP work queue.
+        handle.ready.then((result) => {
+          if (!result.ok && scenePreload?.handle === handle) scenePreload = null;
+        }).catch(() => {});
+        return { started: true };
+      };
+      if (sceneMedia) sceneController = {
+        register: sceneMedia.register, state: sceneMedia.state, forget: sceneMedia.forget,
+        properties: sceneMedia.properties, input: sceneMedia.input, retry: sceneMedia.retry, close: sceneMedia.close,
+        configure: sceneMedia.configure, preload: preloadScene, cancelPreload: cancelScenePreload,
+        finishTransition() { mediaSwitcher.finishTransition(); return true; }
+      };
+
+      const mountMedia = (wallpaper) => {
+        if (!wallpaper) { releaseMedia(); return Promise.resolve({ ok: true }); }
+        const identity = mediaIdentity(wallpaper);
+        if (scenePreload && currentMediaIdentity === identity) {
+          // Effect-only updates must not throw away the next preloaded scene.
+          mediaSwitcher.update({ wallpaper, effects: current.effects });
+          return Promise.resolve({ ok: true, reused: true });
+        }
+        // A matching pending candidate is adopted by prepare(); a different
+        // selection cancels it there. It is no longer speculative once applied.
+        scenePreload = null;
+        updateMediaState("loading");
+        const force = wallpaper.playable === "native" ? nativeMedia?.state(wallpaper.id).retryRequested === true
+          : wallpaper.playable === "direct-gpu" && sceneMedia?.retryRequested(wallpaper.id);
+        return mediaSwitcher.switchTo({ wallpaper, effects: current.effects }, identity, { ...current.effects, force,
+          loadTimeoutMs: wallpaper.playable === "direct-gpu" ? 90000 : undefined }).then((result) => {
+          if (result.error) updateMediaState("error", result.error);
+          return result;
+        });
       };
 
       const syncPlayback = () => {
-        const media = document.getElementById(ids.media);
-        if (!media || media.tagName !== "IFRAME") return;
-        const action = current?.effects?.playing === false ||
-          (document.hidden && current?.effects?.pauseWhenHidden)
-          ? "pause"
-          : "play";
-        media.contentWindow?.postMessage({
-          channel: "cwb-media-control",
-          action,
-          fit: current?.effects?.fit,
-          position: current?.effects?.position
-        }, "*");
+        if (current) mediaSwitcher.update({ effects: current.effects });
+        if (current?.effects.reduceMotion) mediaSwitcher.finishTransition();
       };
 
       const applyVariables = (effects) => {
@@ -757,6 +914,8 @@ function rendererBootstrap() {
         root.style.setProperty("--cwb-position", effects.position);
         root.style.setProperty("--cwb-brightness", String(effects.brightness / 100));
         root.style.setProperty("--cwb-saturation", String(effects.saturation / 100));
+        root.style.setProperty("--cwb-contrast", String(effects.contrast / 100));
+        root.style.setProperty("--cwb-opacity", String(effects.opacity / 100));
         root.style.setProperty("--cwb-blur", effects.blur + "px");
         root.style.setProperty("--cwb-dim", String(effects.dim / 100));
         document.documentElement.style.setProperty("--cwb-glass-alpha", rounded(glassAlpha));
@@ -779,13 +938,26 @@ function rendererBootstrap() {
         ensureStyle();
         const root = ensureRoot();
         if (!root || !current) return;
-        if (!document.getElementById(ids.media)) mountMedia(current.wallpaper);
+        if (!document.getElementById(ids.media)) {
+          // A detached GPU iframe cannot mint its own resource descriptor.
+          // The private lease monitor will rehydrate this document instead.
+          if (current.wallpaper?.playable === "direct-gpu") return;
+          mediaSwitcher.clear(); void mountMedia(current.wallpaper);
+        }
         applyVariables(current.effects);
       };
 
       const updateVisibilityHandler = () => {
         if (visibilityHandler) document.removeEventListener("visibilitychange", visibilityHandler);
-        visibilityHandler = () => syncPlayback();
+        visibilityHandler = () => {
+          if (document.hidden && current?.wallpaper?.playable === "direct-gpu" && mediaSwitcher.status().requestedIdentity) {
+            // Hidden Chromium cannot promise a first paint. Cancel the candidate
+            // only; the trusted lease monitor will retry once visible, not cache
+            // this as a content failure or replace the last committed wallpaper.
+            mediaSwitcher.cancel();
+          }
+          syncPlayback();
+        };
         document.addEventListener("visibilitychange", visibilityHandler);
       };
 
@@ -855,24 +1027,37 @@ function rendererBootstrap() {
       };
 
       const apply = (payload) => {
-        current = {
+        const hadActive = Boolean(currentMediaIdentity);
+        const previousIdentity = currentMediaIdentity;
+        const requested = {
           wallpaper: payload?.wallpaper || null,
+          fallbackReason: ["embedded_video", "custom_static", "preview", "empty"].includes(payload?.fallbackReason) ? payload.fallbackReason : null,
           effects: normalizeEffects(payload?.config?.effects || payload?.effects || {})
         };
+        current = requested;
         const themePromise = ensureDarkTheme();
         const run = async () => {
           document.documentElement.dataset.codexWallpaperBridge = "active";
           ensureStyle();
           ensureRoot();
-          mountMedia(current.wallpaper);
+          const root = document.getElementById(ids.root);
+          if (requested.fallbackReason) root.dataset.cwbFallback = requested.fallbackReason;
+          else delete root.dataset.cwbFallback;
+          const mediaOperation = mountMedia(current.wallpaper);
+          lastMediaOperation = mediaOperation;
           applyVariables(current.effects);
           syncPlayback();
           applyShellOverrides();
           updateVisibilityHandler();
           startObserver();
           const theme = await themePromise;
+          const switchResult = ["native", "direct-gpu"].includes(requested.wallpaper?.playable)
+            || (hadActive && previousIdentity !== mediaIdentity(requested.wallpaper)) ? await mediaOperation : null;
           return {
-            ok: true,
+            ok: switchResult?.ok !== false,
+            deferred: requested === current && requested.wallpaper?.playable === "direct-gpu"
+              && document.hidden && switchResult?.cancelled === true,
+            switchResult,
             wallpaperId: payload?.wallpaper?.id || null,
             domReady: Boolean(document.getElementById(ids.root) && document.getElementById(ids.media)),
             mediaState: mediaState.state,
@@ -894,6 +1079,8 @@ function rendererBootstrap() {
         visibilityHandler = null;
         restoreShellOverrides();
         releaseMedia();
+        nativeMedia?.close();
+        sceneMedia?.close();
         document.getElementById(ids.root)?.remove();
         document.getElementById(ids.style)?.remove();
         document.documentElement.removeAttribute("data-codex-wallpaper-bridge");
@@ -907,26 +1094,37 @@ function rendererBootstrap() {
         document.documentElement.style.removeProperty("--cwb-shell-sheen-bottom");
         current = null;
         themeActivationPromise = null;
-        return { ok: true, theme };
+        return { ok: true, theme, cspReloadRequired: sceneMedia?.used() === true };
       };
 
       return {
         apply,
+        setPower(value) {
+          if (typeof value?.onBattery !== 'boolean') return false;
+          power = { onBattery: value.onBattery };
+          if (current) { current.effects.onBattery = power.onBattery; syncPlayback(); }
+          return true;
+        },
+        // Theme-only preflight does not mount a wallpaper or await its assets.
+        prepareTheme: ensureDarkTheme,
         restore,
         ensureMounted,
-        status: () => ({ ...mediaState, theme: themeState }),
+        waitForMedia: () => lastMediaOperation,
+        status: () => ({ ...mediaState, switch: mediaSwitcher.status(), theme: themeState,
+          playback: resolvePlayback(current?.effects || {}, { hidden: document.hidden === true, inactive: !current }) }),
         ready: true,
         version: VERSION
       };
     };
 
     let runtime = globalThis[KEY];
-    if (!runtime || runtime.version !== VERSION) {
-      try { Promise.resolve(runtime?.restore?.({ preserveTheme: true })).catch(() => {}); } catch {}
+    if (!runtime || runtime.version !== VERSION || nativeEnabled || directSceneEnabled) {
+      // Finish the previous runtime's DOM teardown before installing a new one.
+      try { await runtime?.restore?.({ preserveTheme: true }); } catch {}
       runtime = createRuntime();
       globalThis[KEY] = runtime;
     }
-    return { ok: true, ready: runtime.ready === true, version: runtime.version };
+    return { ok: true, ready: runtime.ready === true, version: runtime.version, transport: nativeController, sceneTransport: sceneController };
 }
 
 /**
@@ -934,8 +1132,12 @@ function rendererBootstrap() {
  * The script is deliberately self-contained: it must run inside Codex without
  * imports, Node globals, or access to this package's filesystem.
  */
-export function buildBootstrapScript() {
-  return `(${rendererBootstrap.toString()})()`;
+export function buildBootstrapScript({ nativeEnabled = false, directSceneEnabled = false } = {}) {
+  // Do not ship unused engine/author adapters to ordinary image/video targets.
+  const engine = nativeEnabled && !directSceneEnabled ? createEngineMediaTransport.toString() : 'null';
+  const gpu = directSceneEnabled ? [createDirectSceneTransport, createScenePreviewSlot, readAuthorProperties, validateAuthorPropertyPatch, validateWebWallpaperInput]
+    .map(fn => fn.toString()).join(', ') : 'null, null, null, null, null';
+  return `(${rendererBootstrap.toString()})(${createMediaSwitcher.toString()}, ${runMediaTransition.toString()}, ${engine}, ${gpu}, ${resolvePlayback.toString()}, ${nativeEnabled === true}, ${directSceneEnabled === true})`;
 }
 
 export function buildApplyScript(payload = {}) {
@@ -945,13 +1147,16 @@ export function buildApplyScript(payload = {}) {
       throw new Error("Codex wallpaper runtime is not ready");
     }
     const result = await runtime.apply(${safePayload(payload)});
+    const fallback = ${JSON.stringify(payload.waitForMedia === true)};
+    const loaded = fallback ? await runtime.waitForMedia() : null;
     return {
       ...result,
+      ...(fallback ? { ok: loaded?.ok === true, degraded: true, fallbackReason: ${JSON.stringify(payload.fallbackReason || null)} } : {}),
       runtimeReady: true,
       runtimeVersion: runtime.version,
       domReady: Boolean(
         document.getElementById("codex-wallpaper-bridge-root") &&
-        document.getElementById("codex-wallpaper-bridge-media")
+        (document.getElementById("codex-wallpaper-bridge-media") || (fallback && ${JSON.stringify(payload.fallbackReason === 'empty')}))
       ),
       media: runtime.status?.() || null
     };
@@ -959,7 +1164,7 @@ export function buildApplyScript(payload = {}) {
 }
 
 export function buildInjectionScript(payload = {}) {
-  return `${buildBootstrapScript()};\n${buildApplyScript(payload)}`;
+  return `(async () => { await ${buildBootstrapScript()}; return await ${buildApplyScript(payload)}; })()`;
 }
 
 export function buildRestoreScript() {

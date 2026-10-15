@@ -6,6 +6,7 @@
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#11120f" />
     <title>Codex Wallpaper Bridge</title>
+    <script src="workbench-theme.js"></script>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -20,6 +21,8 @@
         referrerpolicy="no-referrer"
         tabindex="-1"
       ></iframe>
+      <iframe class="wallpaper__media" id="backgroundScene" title="隔离 Scene 实时预览"
+        sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer" tabindex="-1"></iframe>
       <div class="wallpaper__placeholder" id="backgroundPlaceholder">
         <div class="ambient ambient--one"></div>
         <div class="ambient ambient--two"></div>
@@ -84,10 +87,65 @@
         <nav class="type-filters" id="typeFilters" aria-label="按类型筛选">
           <button class="filter-chip is-active" type="button" data-filter="all">全部</button>
           <button class="filter-chip" type="button" data-filter="video">视频</button>
+          <button class="filter-chip" type="button" data-filter="image">图片</button>
           <button class="filter-chip" type="button" data-filter="web">网页</button>
           <button class="filter-chip" type="button" data-filter="scene">场景</button>
         </nav>
 
+        <div class="library-actions">
+          <button class="text-button" id="importWallpapersButton" type="button">导入 JPG / PNG / MP4</button>
+          <input id="importWallpapersInput" type="file" accept=".jpg,.jpeg,.png,.mp4" multiple hidden />
+          <label><input id="hiddenViewInput" type="checkbox" /> 已隐藏</label>
+        </div>
+        <details class="library-manager" id="libraryTools">
+          <summary>库管理与内容规则</summary>
+          <div class="library-manager__body">
+            <div class="library-manager__row">
+              <button class="text-button" id="batchHideButton" type="button" disabled>隐藏所选</button>
+              <button class="text-button" id="restoreAllWallpapersButton" type="button">恢复全部隐藏</button>
+            </div>
+            <label>导入默认分级
+              <select id="importRatingSelect" aria-label="导入默认分级">
+                <option value="unrated">未分级</option><option value="everyone">Everyone</option>
+                <option value="pg13">PG13</option><option value="mature">Mature</option>
+              </select>
+            </label>
+            <fieldset id="ratingPolicyInputs"><legend>允许显示与播放的分级</legend>
+              <label><input type="checkbox" value="everyone" checked /> Everyone</label>
+              <label><input type="checkbox" value="pg13" checked /> PG13</label>
+              <label><input type="checkbox" value="mature" checked /> Mature</label>
+              <label><input type="checkbox" value="unrated" checked /> 未分级</label>
+            </fieldset>
+            <p>隐藏不删除源文件。移除只对本程序导入的文件开放。</p>
+            <p id="libraryDirectoryText" class="library-directory">资源位置正在读取…</p>
+            <label>迁移到已有目录（创建专属子目录）
+              <input id="libraryDirectoryInput" type="text" autocomplete="off" placeholder="例如 D:\Wallpapers" />
+            </label>
+            <button class="text-button" id="migrateLibraryButton" type="button">复制、验证并切换目录</button>
+            <p>旧目录保留，不移动或删除 WE 原始项目。</p>
+          </div>
+        </details>
+        <div class="asset-task" id="assetTask" hidden aria-live="polite">
+          <p id="assetTaskText">准备导入…</p>
+          <progress id="assetTaskProgress" max="100" value="0"></progress>
+          <button id="cancelAssetTaskButton" class="text-button" type="button">取消任务</button>
+        </div>
+
+          <details class="library-manager" id="playlistTools">
+            <summary>播放列表、轮播与过场</summary>
+            <div class="library-manager__body playlist-body">
+              <label>当前列表<select id="playlistSelect" aria-label="当前播放列表"></select></label>
+              <label>列表名称<input id="playlistNameInput" type="text" maxlength="80" placeholder="新列表名称" /></label>
+              <div class="library-manager__row"><button class="text-button" id="playlistCreateButton" type="button">新建</button><button class="text-button" id="playlistRenameButton" type="button">重命名</button><button class="text-button" id="playlistDeleteButton" type="button">删除列表</button></div>
+              <div class="library-manager__row"><button class="text-button" id="playlistAddCurrentButton" type="button">添加当前</button><button class="text-button" id="playlistAddMarkedButton" type="button">添加勾选</button><button class="text-button" id="playlistImportButton" type="button">导入 WE JSON</button><input id="playlistImportInput" type="file" accept=".json,application/json" hidden /></div>
+              <ol id="playlistEntries" aria-label="列表顺序"></ol>
+              <label><input id="playlistEnabledInput" type="checkbox" />启用轮播</label>
+              <label>顺序<select id="playlistOrderSelect"><option value="sequential">顺序</option><option value="random">随机（不连续重复）</option></select></label>
+              <label>间隔秒（5–86400）<input id="playlistIntervalInput" type="number" min="5" max="86400" step="1" value="60" /></label>
+              <div class="library-manager__row"><button class="text-button" id="playlistNextButton" type="button">下一张</button><button class="text-button" id="playlistRetryButton" type="button">重试失效项</button></div>
+              <p id="playlistStatusText" aria-live="polite">轮播已停止</p>
+            </div>
+          </details>
         <div class="library-heading">
           <div>
             <h2>本机壁纸</h2>
@@ -103,6 +161,7 @@
           <div class="skeleton-card"><i></i><span></span><small></small></div>
           <div class="skeleton-card"><i></i><span></span><small></small></div>
         </div>
+        <button class="text-button library-more" id="moreWallpapersButton" type="button" hidden>显示更多壁纸</button>
 
         <div class="empty-state" id="emptyState" hidden>
           <div class="empty-state__icon">
@@ -138,6 +197,11 @@
               <svg viewBox="0 0 24 24"><path d="M5 8V4m0 0h4M5 4l4 4M19 16v4m0 0h-4m4 0-4-4M4 15a8 8 0 0 0 12.5 3.5M20 9A8 8 0 0 0 7.5 5.5"/></svg>
               <span>恢复官方外观</span>
             </button>
+            <button class="button button--ghost" id="engineRetryButton" type="button" hidden aria-label="重试场景" title="仅在引擎失败后显式重新加载，不会自动循环重试"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 5v6h-6"/></svg><span>重试场景</span></button>
+            <label class="engine-fallback-control" id="engineFallbackControl" for="engineFallbackSelect" hidden title="没有已显示画面且引擎失败时，先尝试包外内嵌视频，再使用所选图片和预览图；不自动切回 VP8">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4V5Zm0 10 5-5 4 4 3-3 4 4M15 9h.01"/></svg><span>静态回退</span>
+              <select id="engineFallbackSelect" aria-label="场景或网页的自定义静态回退图片"><option value="">默认预览图</option></select>
+            </label>
             <button class="button button--primary" id="injectButton" type="button">
               <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg>
               <span>注入 Codex</span>
@@ -180,9 +244,15 @@
               <p>APPEARANCE</p>
               <h2>显示设置</h2>
             </div>
-            <button class="icon-button" id="resetEffectsButton" type="button" title="重置显示设置" aria-label="重置显示设置">
-              <svg viewBox="0 0 24 24"><path d="M5 8V4m0 0h4M5 4l4 4M4 13a8 8 0 1 0 2.3-5.6"/></svg>
-            </button>
+            <div class="settings-header-actions">
+              <div class="theme-switcher" role="group" aria-label="工作台主题">
+                <button type="button" data-theme-choice="light" aria-label="浅色主题" aria-pressed="false" title="浅色主题 · 淡蓝"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"/></svg></button>
+                <button type="button" data-theme-choice="dark" aria-label="深色主题" aria-pressed="true" title="深色主题"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.2A8.5 8.5 0 0 1 8.8 4a8.5 8.5 0 1 0 11.2 11.2Z"/></svg></button>
+              </div>
+              <button class="icon-button" id="resetEffectsButton" type="button" title="重置显示设置" aria-label="重置显示设置">
+                <svg viewBox="0 0 24 24"><path d="M5 8V4m0 0h4M5 4l4 4M4 13a8 8 0 1 0 2.3-5.6"/></svg>
+              </button>
+            </div>
           </header>
 
           <div class="setting-group">
@@ -190,7 +260,7 @@
               <span><svg viewBox="0 0 24 24"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"/></svg>亮度</span>
               <output id="brightnessValue">72%</output>
             </label>
-            <input class="range" id="brightnessRange" type="range" min="20" max="150" step="1" value="72" />
+            <input class="range" id="brightnessRange" type="range" min="10" max="160" step="1" value="72" />
           </div>
 
           <div class="setting-group">
@@ -198,7 +268,7 @@
               <span><svg viewBox="0 0 24 24"><path d="M20 15.2A8.5 8.5 0 0 1 8.8 4a8.5 8.5 0 1 0 11.2 11.2Z"/></svg>暗化遮罩</span>
               <output id="darknessValue">22%</output>
             </label>
-            <input class="range" id="darknessRange" type="range" min="0" max="85" step="1" value="22" />
+            <input class="range" id="darknessRange" type="range" min="0" max="90" step="1" value="22" />
           </div>
 
           <div class="setting-group">
@@ -206,7 +276,7 @@
               <span><svg viewBox="0 0 24 24"><path d="M7 5h10M5 9h14M7 13h10M9 17h6M11 21h2"/></svg>背景模糊</span>
               <output id="blurValue">0px</output>
             </label>
-            <input class="range" id="blurRange" type="range" min="0" max="30" step="1" value="0" />
+            <input class="range" id="blurRange" type="range" min="0" max="40" step="1" value="0" />
           </div>
 
           <div class="setting-group">
@@ -214,7 +284,7 @@
               <span><svg viewBox="0 0 24 24"><path d="M12 3s7 7.2 7 12a7 7 0 0 1-14 0c0-4.8 7-12 7-12Zm0 0v19"/></svg>色彩饱和度</span>
               <output id="saturationValue">100%</output>
             </label>
-            <input class="range range--spectrum" id="saturationRange" type="range" min="0" max="180" step="1" value="100" />
+            <input class="range range--spectrum" id="saturationRange" type="range" min="0" max="240" step="1" value="100" />
           </div>
 
           <div class="settings-divider"></div>
@@ -242,6 +312,75 @@
             <input class="switch-input" id="playbackToggle" type="checkbox" checked />
             <span class="switch" aria-hidden="true"></span>
           </div>
+
+          <details class="effect-advanced" open>
+            <summary><svg class="settings-section-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V4h4m8 0h4v4M4 16v4h4m8 0h4v-4M9 8l7 4-7 4V8Z"/></svg><span>取景、播放与声音</span></summary>
+            <p class="effect-hint">支持直接输入数值；“重置”恢复服务端默认值。镜像、倍速和声音只更新当前媒体。</p>
+            <div class="effect-row"><label for="positionXNumber">水平位置 %</label><input class="range" data-effect="positionX" type="range" min="0" max="100" step="1" aria-label="水平位置" /><input id="positionXNumber" data-effect="positionX" type="number" min="0" max="100" step="1" /></div>
+            <div class="effect-row"><label for="positionYNumber">垂直位置 %</label><input class="range" data-effect="positionY" type="range" min="0" max="100" step="1" aria-label="垂直位置" /><input id="positionYNumber" data-effect="positionY" type="number" min="0" max="100" step="1" /></div>
+            <div class="effect-row"><label for="zoomNumber">缩放 %</label><input class="range" data-effect="zoom" type="range" min="50" max="300" step="1" aria-label="缩放" /><input id="zoomNumber" data-effect="zoom" type="number" min="50" max="300" step="1" /></div>
+            <div class="effect-row"><label for="playbackRateNumber">播放倍速</label><input class="range" data-effect="playbackRate" type="range" min="0.25" max="4" step="0.25" aria-label="播放倍速" /><input id="playbackRateNumber" data-effect="playbackRate" type="number" min="0.25" max="4" step="0.25" /></div>
+            <div class="effect-row"><label for="contrastNumber">对比度 %</label><input class="range" data-effect="contrast" type="range" min="0" max="240" step="1" aria-label="对比度" /><input id="contrastNumber" data-effect="contrast" type="number" min="0" max="240" step="1" /></div>
+            <div class="effect-row"><label for="opacityNumber">壁纸不透明度 %</label><input class="range" data-effect="opacity" type="range" min="0" max="100" step="1" aria-label="壁纸不透明度" /><input id="opacityNumber" data-effect="opacity" type="number" min="0" max="100" step="1" /></div>
+            <label class="effect-check"><span>水平镜像</span><input id="mirrorInput" data-effect="mirror" type="checkbox" /></label>
+            <label class="effect-check"><span>播放壁纸声音<small>默认静音，开启后使用下方音量</small></span><input id="audioEnabledInput" data-effect="audioEnabled" type="checkbox" /></label>
+            <div class="effect-row"><label for="volumeNumber">音量 %</label><input class="range" data-effect="volume" type="range" min="0" max="100" step="1" aria-label="音量" /><input id="volumeNumber" data-effect="volume" type="number" min="0" max="100" step="1" /></div>
+            <label class="effect-check"><span>窗口隐藏时自动暂停</span><input id="pauseWhenHiddenInput" data-effect="pauseWhenHidden" type="checkbox" /></label>
+            <label class="effect-check"><span>使用电池时自动暂停<small>保留你的手动播放状态</small></span><input id="pauseOnBatteryInput" data-effect="pauseOnBattery" type="checkbox" /></label>
+            <output id="playbackPolicyStatus" aria-live="polite"></output>
+          </details>
+
+          <details class="effect-advanced" id="transitionTools" open>
+            <summary><svg class="settings-section-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4"/></svg><span>切换过场</span></summary>
+            <p class="effect-hint">手动选择和轮播共用过场；新媒体就绪后切换。系统减少动态效果时自动硬切。</p>
+            <label class="effect-field" for="transitionSelect"><span>过场效果</span><select id="transitionSelect" data-effect="transition"><option value="cut">硬切</option><option value="fade">淡化</option><option value="push">推移</option><option value="wipe">擦除</option><option value="iris">光圈</option><option value="zoom">缩放</option><option value="stripes">条带</option></select></label>
+            <label class="effect-field" for="transitionDirectionSelect"><span>切换方向</span><select id="transitionDirectionSelect" data-effect="transitionDirection"><option value="left">向左</option><option value="right">向右</option><option value="up">向上</option><option value="down">向下</option></select></label>
+            <div class="effect-row"><label for="transitionDurationNumber">时长 ms</label><input class="range" data-effect="transitionDurationMs" type="range" min="100" max="3000" step="50" aria-label="过场时长" /><input id="transitionDurationNumber" data-effect="transitionDurationMs" type="number" min="100" max="3000" step="50" /></div>
+            <label class="effect-check"><span>减少动态效果<small>关闭过场动画，直接切换壁纸</small></span><input id="reduceMotionInput" data-effect="reduceMotion" type="checkbox" /></label>
+          </details>
+          <details class="effect-advanced" id="systemMediaPanel">
+            <summary><svg class="settings-section-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l11-2v13M9 8l11-2M9 18a3 3 0 1 1-3-3c1.7 0 3 1.3 3 3Zm11-2a3 3 0 1 1-3-3c1.7 0 3 1.3 3 3Z"/></svg><span>系统音乐联动</span><span class="settings-badge">Windows</span></summary>
+            <label class="effect-check"><span>系统音频频谱<small>采集系统输出，不使用麦克风</small></span><input data-media="captureAudio" type="checkbox" /></label>
+            <label class="effect-check"><span>读取当前歌曲<small>同步歌名、封面与播放时间线</small></span><input data-media="nowPlaying" type="checkbox" /></label>
+            <label class="effect-check"><span>允许壁纸控制播放器<small>仅对受支持的壁纸生效</small></span><input data-media="allowControl" type="checkbox" /></label>
+            <label class="effect-check"><span>在线同步歌词<small>发送歌名 / 歌手查询，本地歌词优先</small></span><input data-media="onlineLyrics" type="checkbox" /></label>
+            <div class="system-media-card">
+              <p id="systemMediaStatus" aria-live="polite">系统媒体尚未启用</p>
+              <div class="system-media-track">
+                <img id="systemMediaCover" width="48" height="48" alt="当前歌曲封面" hidden />
+                <div class="system-media-copy"><p id="systemMediaTrack">没有当前歌曲</p><p id="systemMediaLyrics"></p></div>
+              </div>
+              <p id="systemLyricsStatus" class="effect-hint" aria-live="polite">歌词：先启用歌曲读取</p>
+              <div class="settings-actions media-transport" role="group" aria-label="系统媒体播放控制">
+                <button type="button" data-media-command="previous" title="上一首" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5v14m14-14L8 12l11 7V5Z"/></svg><span>上一首</span></button>
+                <button class="settings-action-primary" type="button" data-media-command="play" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"/></svg><span>播放</span></button>
+                <button type="button" data-media-command="pause" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg><span>暂停</span></button>
+                <button type="button" data-media-command="next" title="下一首" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 5v14M5 5l11 7-11 7V5Z"/></svg><span>下一首</span></button>
+              </div>
+            </div>
+            <label class="effect-field effect-field--stacked" for="systemLyricsInput"><span>导入本地歌词<small>LRC 格式 · 最大 128 KiB · 应用到当前歌曲</small></span><input id="systemLyricsInput" type="file" accept=".lrc,text/plain" /></label>
+          </details>
+
+          <details class="effect-advanced" id="videoOptimizationPanel">
+            <summary><svg class="settings-section-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h12v14H4V5Zm12 5 5-3v10l-5-3M8 9h4m-4 4h4"/></svg><span>视频优化与缓存</span></summary>
+            <p class="effect-hint">转码期间继续播放原片；完成后由你应用优化版。Faststart 使用虚拟布局，不复制整份原片，也不保证任意视频一秒首帧。</p>
+            <label class="effect-check"><span>Faststart 虚拟前置<small>不支持的 MP4 布局保留原样</small></span><input data-video="faststart" type="checkbox" /></label>
+            <label class="effect-check"><span>优先使用已校验的优化版本<small>没有可用版本时继续播放原片</small></span><input data-video="useOptimized" type="checkbox" /></label>
+            <label class="effect-field" for="videoFpsCap"><span>帧率上限 <small>FPS</small></span><input id="videoFpsCap" data-video="fpsCap" type="number" min="1" max="120" step="1" value="30" /></label>
+            <label class="effect-field effect-field--stacked" for="videoEncoder"><span>视频编码器</span><select id="videoEncoder" data-video="encoder"><option value="auto">自动硬件 → 软件回退</option><option value="software">软件 libx264</option><option value="h264_nvenc">NVENC → 软件回退</option><option value="h264_qsv">QSV → 软件回退</option><option value="h264_amf">AMF → 软件回退</option></select></label>
+            <button id="probeVideoToolsButton" type="button">探测本机 ffmpeg / ffprobe</button>
+            <p id="videoToolsStatus" role="status">未探测；缺少工具时原片播放不受影响。可设置 CWB_FFMPEG_PATH / CWB_FFPROBE_PATH 后重新启动桥。</p>
+            <div class="settings-actions"><button class="settings-action-primary" id="optimizeVideoButton" type="button">优化当前视频</button><button id="cancelVideoJobButton" type="button" disabled>取消</button><button id="retryVideoJobButton" type="button" disabled>重试</button></div>
+            <progress id="videoJobProgress" max="1" value="0" aria-label="视频优化进度"></progress><p id="videoJobStatus" role="status">没有视频任务</p>
+            <button class="settings-action-primary" id="applyOptimizedVideoButton" type="button" disabled>应用已验证优化版</button>
+            <p id="cacheDirectoryStatus" role="status">缓存路径尚未读取</p>
+            <label class="effect-field effect-field--stacked" for="cacheDirectoryInput"><span>迁移缓存目录</span><input id="cacheDirectoryInput" type="text" placeholder="已存在父目录的绝对路径" /></label>
+            <p class="effect-hint">复制到 CodexWallpaperBridge-cache 子目录，校验后切换路径。保留源缓存和未知文件，不移动 WE 原件、自定义库或本地歌词。环境覆盖启用时不允许迁移。</p>
+            <div class="settings-actions"><button class="settings-action-primary" id="migrateCacheButton" type="button">复制、校验并迁移</button><button id="cancelCacheJobButton" type="button" disabled>取消</button><button id="retryCacheJobButton" type="button" disabled>重试</button><button id="resumeCacheJobButton" type="button" disabled>恢复中断迁移</button></div>
+            <progress id="cacheJobProgress" max="1" value="0" aria-label="缓存迁移进度"></progress><p id="cacheJobStatus" role="status">没有缓存迁移任务</p>
+          </details>
+
+          <details class="effect-advanced" id="authorPropertiesPanel" hidden open></details>
 
           <div class="settings-note">
             <svg viewBox="0 0 24 24"><path d="M12 8v4m0 4h.01M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z"/></svg>
@@ -283,7 +422,19 @@
       </form>
     </dialog>
 
+    <dialog class="library-confirm" id="libraryConfirmDialog" aria-labelledby="libraryConfirmTitle">
+      <form method="dialog">
+        <h2 id="libraryConfirmTitle">确认资源操作</h2>
+        <p id="libraryConfirmMessage"></p>
+        <div class="library-manager__row">
+          <button class="button button--ghost" id="libraryConfirmCancelButton" value="cancel" autofocus>取消</button>
+          <button class="button button--primary" id="libraryConfirmAcceptButton" value="confirm">确认</button>
+        </div>
+      </form>
+    </dialog>
+
     <template id="wallpaperCardTemplate">
+      <div class="wallpaper-entry">
       <button class="wallpaper-card" type="button" role="option">
         <span class="wallpaper-card__preview">
           <img alt="" loading="lazy" />
@@ -297,9 +448,22 @@
           <span class="wallpaper-card__meta"><span class="wallpaper-card__type"></span><span class="wallpaper-card__live"></span></span>
         </span>
       </button>
+      <div class="asset-controls">
+        <label><input class="asset-mark" type="checkbox" /> 管理</label>
+        <select class="asset-rating" aria-label="壁纸内容分级">
+          <option value="everyone">Everyone</option><option value="pg13">PG13</option>
+          <option value="mature">Mature</option><option value="unrated">未分级</option>
+        </select>
+        <button class="text-button asset-restore" type="button" hidden>恢复</button>
+        <button class="text-button asset-remove" type="button" hidden>移除</button>
+      </div>
+      </div>
     </template>
 
     <script src="electron-host.js" defer></script>
+    <script src="media-switch.js" defer></script>
+    <script src="workbench-scene-preview.js" defer></script>
+    <script src="author-properties-panel.js" defer></script>
     <script src="app.js" defer></script>
   </body>
 </html>

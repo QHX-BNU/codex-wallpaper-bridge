@@ -18,9 +18,11 @@
   function isConfigWrite(input, init = {}) {
     const rawUrl = typeof input === "string" ? input : input?.url;
     const method = String(init.method || input?.method || "GET").toUpperCase();
-    if (method !== "POST" || !rawUrl) return false;
+    if (!["POST", "PUT"].includes(method) || !rawUrl) return false;
     try {
-      return new URL(rawUrl, window.location.href).pathname.endsWith("/api/config");
+      const pathname = new URL(rawUrl, window.location.href).pathname;
+      return pathname.endsWith("/api/config") || pathname.includes("/api/library/") || pathname.includes("/api/playlists/")
+        || pathname.includes("/api/author-properties/");
     } catch {
       return false;
     }
@@ -45,7 +47,7 @@
     const target = event.target;
     if (!(target instanceof Element)) return;
     if (!target.closest(
-      ".wallpaper-card,#brightnessRange,#darknessRange,#blurRange,#saturationRange,#fitSelect,#playbackToggle,#resetEffectsButton",
+      ".wallpaper-card,.asset-controls,#libraryTools,#playlistTools,#authorPropertiesPanel,[data-effect],#importWallpapersButton,#importWallpapersInput,#brightnessRange,#darknessRange,#blurRange,#saturationRange,#fitSelect,#playbackToggle,#resetEffectsButton",
     )) return;
     lastMutationAt = Date.now();
     notify("dirty");
@@ -55,12 +57,12 @@
     const deadline = Date.now() + FLUSH_TIMEOUT_MS;
     while (Date.now() < deadline) {
       const quietFor = Date.now() - lastMutationAt;
-      if (pendingWrites.size === 0 && quietFor >= CONFIG_QUIET_MS) {
+      if (pendingWrites.size === 0 && !window.__cwbPlaylistBusy && !window.__cwbAuthorPropertiesBusy && quietFor >= CONFIG_QUIET_MS) {
         const saveIndicator = document.querySelector("#saveIndicator");
         if (saveIndicator?.classList.contains("is-error")) {
           throw new Error("壁纸设置保存失败，请重试后再应用");
         }
-        return;
+        if (!saveIndicator?.classList.contains("is-saving")) return;
       }
       await new Promise((resolve) => window.setTimeout(resolve, 40));
     }
@@ -108,6 +110,7 @@
 
   function renderDesktopState(state) {
     latestDesktopState = state;
+    window.cwbWorkbenchTheme?.restore(state.workbenchTheme);
     const elements = controls();
     if (!elements.bar) return;
     elements.bar.hidden = false;
@@ -193,6 +196,10 @@
   });
 
   document.addEventListener("input", markMutation, true);
+  window.addEventListener("cwb-workbench-theme-change", event => {
+    const theme = event.detail?.theme;
+    if (theme === "light" || theme === "dark") notify("workbench-theme", { theme });
+  });
   document.addEventListener("change", markMutation, true);
   document.addEventListener("click", markMutation, true);
   document.documentElement.dataset.cwbDesktopEmbedded = "true";

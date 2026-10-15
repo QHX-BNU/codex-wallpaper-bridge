@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { access, copyFile, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractFile, listPackage } from "@electron/asar";
+import { listPackage } from "@electron/asar";
 import { Arch, build, Platform } from "electron-builder";
 import {
   assertChildPath,
@@ -16,10 +16,17 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const prototypeRoot = path.resolve(here, "..");
 const outputRoot = path.join(prototypeRoot, "out");
 const packageJson = JSON.parse(await readFile(path.join(prototypeRoot, "package.json"), "utf8"));
+const electronRoot = path.join(prototypeRoot, "node_modules", "electron");
+const electronDist = path.join(electronRoot, "dist");
+const electronPackage = JSON.parse(await readFile(path.join(electronRoot, "package.json"), "utf8"));
+const electronRuntimeVersion = (await readFile(path.join(electronDist, "version"), "utf8")).trim();
+if (electronRuntimeVersion !== electronPackage.version) throw new Error("本地 Electron 运行时版本不一致，请重新安装依赖");
 const names = windowsArtifactNames("CodexWallpaperDesktop", packageJson.version);
 const scratchRoot = assertChildPath(outputRoot, path.join(outputRoot, names.scratchDirectoryName));
 const releaseRoot = assertChildPath(outputRoot, path.join(outputRoot, names.releaseDirectoryName));
 const finalPath = assertChildPath(releaseRoot, path.join(releaseRoot, names.portableName));
+const packageStartedAt = performance.now();
+const logTiming = (stage, startedAt) => console.log(`[build-timing] ${JSON.stringify({ stage, durationMs: Math.round(performance.now() - startedAt) })}`);
 
 async function exists(targetPath) {
   try {
@@ -57,16 +64,6 @@ async function validateUnpackedApplication(unpackedRoot) {
 
   const entries = assertProtectedPackageEntries(listPackage(appAsar));
   const unpackedEntries = assertProtectedUnpackedEntries(await listRelativeFiles(asarUnpacked));
-  const mainCode = extractFile(appAsar, path.join("dist", "main.mjs")).toString("utf8");
-  const bridgeCode = await readFile(
-    path.join(asarUnpacked, "dist", "bridge-runtime", "src", "cli.mjs"),
-    "utf8",
-  );
-  for (const marker of ["buildCompatibilityScript", "createVideoTransferAsset", "rendererEffects"]) {
-    if (mainCode.includes(marker) || bridgeCode.includes(marker)) {
-      throw new Error(`编译产物仍暴露关键源码标识：${marker}`);
-    }
-  }
   return { appAsar, entries, unpackedEntries };
 }
 
@@ -82,9 +79,13 @@ if (await exists(releaseRoot)) {
 
 let succeeded = false;
 try {
+  const builderStartedAt = performance.now();
   const artifacts = await build({
     config: {
       ...packageJson.build,
+      // Reuse npm's matching runtime instead of downloading it again through a mirror.
+      electronVersion: electronRuntimeVersion,
+      electronDist,
       directories: {
         ...packageJson.build.directories,
         output: scratchRoot,
@@ -93,12 +94,14 @@ try {
     publish: "never",
     targets: Platform.WINDOWS.createTarget(["portable"], Arch.x64),
   });
+  logTiming("electron-builder", builderStartedAt);
   const builtPortable = artifacts.find((artifact) => (
     path.basename(artifact).toLowerCase() === names.builderArtifactName.toLowerCase()
   ));
   if (!builtPortable) throw new Error(`未找到 Portable 产物：${names.builderArtifactName}`);
 
   const unpackedRoot = path.join(scratchRoot, names.unpackedDirectoryName);
+  const validationStartedAt = performance.now();
   const validation = await validateUnpackedApplication(unpackedRoot);
   await mkdir(releaseRoot, { recursive: true });
   await copyFile(builtPortable, finalPath);
@@ -113,7 +116,8 @@ try {
   console.log(`文件大小：${(info.size / 1024 / 1024).toFixed(2)} MiB`);
   console.log(`SHA-256：${await sha256(finalPath)}`);
   console.log(`ASAR 条目：${validation.entries.length}（主程序完整性校验已启用）`);
-  console.log(`解包运行文件：${validation.unpackedEntries.length}（仅编译混淆后的桥接文件）`);
+  console.log(`解包运行文件：${validation.unpackedEntries.length}（编译桥接文件及必要资源，不含代码混淆）`);
+  logTiming("validate-copy-hash", validationStartedAt);
   succeeded = true;
 } finally {
   if (succeeded) {
@@ -121,4 +125,5 @@ try {
   } else {
     console.error(`构建未完成，诊断目录保留在：${scratchRoot}`);
   }
+  logTiming("package-total", packageStartedAt);
 }

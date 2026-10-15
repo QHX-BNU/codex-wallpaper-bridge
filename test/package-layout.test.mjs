@@ -5,6 +5,7 @@ import {
   assertProtectedPackageEntries,
   assertProtectedUnpackedEntries,
   windowsArtifactNames,
+  COMPILED_BRIDGE_UNPACKED_FILES,
 } from "../src/package-layout.mjs";
 
 test("manual package paths stay inside the prototype output root", () => {
@@ -33,6 +34,7 @@ test("protected ASAR layout contains only compiled application entries", () => {
     "/package.json",
     "/dist/main.mjs",
     "/dist/preload.cjs",
+    "/dist/engine-vp8-preload.cjs",
     "/dist/bridge-utility-entry.mjs",
     "/dist/bridge-runtime/src/cli.mjs",
     "/dist/bridge-runtime/public/index.html",
@@ -50,14 +52,7 @@ test("protected ASAR layout contains only compiled application entries", () => {
 });
 
 test("ASAR unpack allows only the compiled bridge runtime", () => {
-  const entries = [
-    "dist/bridge-utility-entry.mjs",
-    "dist/bridge-runtime/public/app.js",
-    "dist/bridge-runtime/public/electron-host.js",
-    "dist/bridge-runtime/public/index.html",
-    "dist/bridge-runtime/public/styles.css",
-    "dist/bridge-runtime/src/cli.mjs",
-  ];
+  const entries = [...COMPILED_BRIDGE_UNPACKED_FILES];
   assert.deepEqual(assertProtectedUnpackedEntries(entries), entries);
   assert.throws(
     () => assertProtectedUnpackedEntries([
@@ -66,4 +61,8 @@ test("ASAR unpack allows only the compiled bridge runtime", () => {
     ]),
     /未批准/,
   );
+  for (const entry of ['dist/bridge-runtime/src/engine-vp8-preload.cjs', 'dist/bridge-runtime/vendor/webwallgl/mediabunny-LICENSE',
+    'dist/bridge-runtime/vendor/webwallgl/sources/mediabunny-1.56.0.tgz']) {
+    assert.throws(() => assertProtectedUnpackedEntries(entries.filter((value) => value !== entry)), /缺少/);
+  }
 });

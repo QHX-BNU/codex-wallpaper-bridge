@@ -1,5 +1,18 @@
 import path from "node:path";
 
+// Exact compiled/native/vendor allowlist. No source-tree wildcard and no WE assets.
+export const COMPILED_BRIDGE_UNPACKED_FILES = Object.freeze([
+  "dist/bridge-utility-entry.mjs",
+  ...["windows-media.ps1", "windows-media.dll"].map(file => `dist/bridge-runtime/native/${file}`),
+  ...["app.js", "author-properties-panel.js", "cwb-scene-bridge.js", "cwb-verifier-probe.js", "cwb-web-bridge.js",
+    "electron-host.js", "index.html", "media-switch.js", "workbench-scene-preview.js", "workbench-theme.js", "styles.css"].map((file) => `dist/bridge-runtime/public/${file}`),
+  ...["cli.mjs", "desktop-engine-host.mjs", "engine-provider-rpc.mjs", "engine-renderer-owner.mjs", "engine-vp8-preload.cjs",
+    "native-engine-provider.mjs", "scene-server.mjs"].map((file) => `dist/bridge-runtime/src/${file}`),
+  ...["index.html", "LICENSE", "mediabunny-LICENSE", "NOTICE.md", "vendor-lock.json", "we-scene-LICENSE", "web-shim.js",
+    "assets/modulepreload-polyfill-B5Qt9EMX.js", "assets/renderer-AJkjEL9i.js", "default-wallpaper/index.html",
+    "sources/mediabunny-1.56.0.tgz"].map((file) => `dist/bridge-runtime/vendor/webwallgl/${file}`),
+]);
+
 export function assertChildPath(parentPath, targetPath) {
   const parent = path.resolve(parentPath);
   const target = path.resolve(targetPath);
@@ -25,6 +38,7 @@ export function assertProtectedPackageEntries(entries) {
   const required = [
     "/dist/main.mjs",
     "/dist/preload.cjs",
+    "/dist/engine-vp8-preload.cjs",
     "/dist/bridge-utility-entry.mjs",
     "/dist/bridge-runtime/src/cli.mjs",
     "/dist/bridge-runtime/public/index.html",
@@ -48,14 +62,7 @@ export function assertProtectedPackageEntries(entries) {
 
 export function assertProtectedUnpackedEntries(entries) {
   const normalized = entries.map((entry) => entry.replaceAll("\\", "/"));
-  const allowed = new Set([
-    "dist/bridge-utility-entry.mjs",
-    "dist/bridge-runtime/public/app.js",
-    "dist/bridge-runtime/public/electron-host.js",
-    "dist/bridge-runtime/public/index.html",
-    "dist/bridge-runtime/public/styles.css",
-    "dist/bridge-runtime/src/cli.mjs",
-  ]);
+  const allowed = new Set(COMPILED_BRIDGE_UNPACKED_FILES);
   const unexpected = normalized.find((entry) => !allowed.has(entry));
   if (unexpected) throw new Error(`松散目录包含未批准的文件：${unexpected}`);
   for (const entry of allowed) {
