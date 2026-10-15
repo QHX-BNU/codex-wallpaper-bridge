@@ -154,15 +154,15 @@ npm start
 - 长时间运行的资源占用仍需验证，部分场景已观察到内存增长。不承诺固定首帧时间、帧率或资源占用。
 - 导入任务不支持断点续传；资源库和缓存迁移会保留旧副本，需要额外磁盘空间。
 
-分区玻璃主题、字体与光标设置、壁纸配色联动、头像/桌宠和多语言属于后续计划，不包含在目前功能中。详细实现与验证状态见[开发状态](docs/FEATURE_COMPLETION_STATUS.md)。
+分区玻璃主题、字体与光标设置、壁纸配色联动、头像/桌宠和多语言属于后续计划，不包含在目前功能中。本版更新及验证范围见 [1.0.0 版本说明](docs/RELEASE_1.0.0.md)。
 
 ## 下载与构建
 
 已发布的程序见 [GitHub Releases](https://github.com/whisperia6/codex-wallpaper-bridge/releases)。下载前请看对应版本说明，当前分支中的新功能不一定已经打包发布。
 
-仓库同步保存了 **2026-10-15 构建的 `1.0.0` 正式版**：[下载单文件 EXE](https://github.com/whisperia6/codex-wallpaper-bridge/raw/refs/tags/v1.0.0/out/release-1.0.0/CodexWallpaperDesktop.exe)（Windows x64，97.71 MiB）。包含工作台深浅色主题和移除混淆后的构建更新，见 [1.0.0 版本说明](docs/RELEASE_1.0.0.md)。真实双宿主完整验收仍待完成，实际验证范围见[目前的限制](#目前的限制)。
+**2026-10-15 构建的 `1.0.0` 正式版**：[下载单文件 EXE](https://github.com/whisperia6/codex-wallpaper-bridge/releases/download/v1.0.0/CodexWallpaperDesktop.exe)（Windows x64，97.71 MiB）。成品仅通过 [Release 附件](https://github.com/whisperia6/codex-wallpaper-bridge/releases/tag/v1.0.0)分发，不提交到源码目录。功能与验证范围见 [1.0.0 版本说明](docs/RELEASE_1.0.0.md)和[目前的限制](#目前的限制)。
 
-SHA-256：`991D3956D958BF5E5E40E2AC2EDA35994A2FB40DA0E7D690763B27DC90601AA7`（[校验文件](out/release-1.0.0/SHA256SUMS.txt)）。
+SHA-256：`991D3956D958BF5E5E40E2AC2EDA35994A2FB40DA0E7D690763B27DC90601AA7`（[校验文件](https://github.com/whisperia6/codex-wallpaper-bridge/releases/download/v1.0.0/SHA256SUMS.txt)）。
 
 自行构建 Windows 单文件版：
 
@@ -189,10 +189,12 @@ bridge-runtime/    壁纸服务、工作台、播放与媒体功能
 bridge-overrides/  部分桥接模块的维护源，同步到 runtime
 scripts/           同步、构建、打包和专项验证脚本
 test/              自动化测试
-docs/              功能说明、开发计划和验证记录
+docs/              公开接口文档、版本说明和截图
 ```
 
 修改桥接代码时，若 `bridge-overrides/` 中有同名文件，应修改该文件并运行 `npm run sync:bridge`；其余 runtime 模块直接修改。不要手工编辑 `dist/` 或发布产物。
+
+`test/` 保留在源码仓库供开发者回归验证。`out/`、`dist/`、本机开发记录、日志和个人配置均不纳入版本跟踪；Release 中的 EXE 附件不附带测试与开发文档。
 
 测试按改动范围运行。例如，检查媒体进程恢复和工作台视频就绪逻辑：
 
@@ -203,7 +205,7 @@ node --test test/m3-provider-recovery.test.mjs test/m3-workbench-readiness.test.
 
 提交问题时，请附上 Codex 版本、Store/本地版、壁纸类型、复现步骤和相关错误信息。日志发出前请去掉聊天内容、账号信息及个人路径。项目配置、媒体素材、测试产物和本地工作记录不需要一起提交。
 
-更多记录：[功能计划](docs/FEATURE_COMPLETION_PLAN.md) · [开发状态](docs/FEATURE_COMPLETION_STATUS.md) · [Web 接口](docs/M2_WEB_APIS.md) · [GPU 场景说明](docs/GPU_DIRECT_SCENE.md)
+更多文档：[运行时说明](bridge-runtime/README.md) · [Web 壁纸接口](docs/WEB_API.md) · [1.0.0 版本说明](docs/RELEASE_1.0.0.md)
 
 ## 第三方组件
 

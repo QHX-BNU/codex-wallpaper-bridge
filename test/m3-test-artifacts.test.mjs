@@ -5,6 +5,8 @@ import path from 'node:path';
 import { createTestScratch, cleanupTestScratch } from '../scripts/m3-test-artifacts.mjs';
 
 async function fixture(t) {
+  // A fresh source checkout deliberately has no tracked build-output directory.
+  await mkdir(path.resolve('out'), { recursive: true });
   const root = await mkdtemp(path.resolve('out/m3-scratch-unit-'));
   // This exact, newly-created output directory is the only test teardown target.
   t.after(() => rm(root, { recursive: true, force: true }));

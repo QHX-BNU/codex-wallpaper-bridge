@@ -12,6 +12,15 @@ coverage/
 *.7z
 *.blockmap
 
+# Workstation-only implementation plans, historical experiments and acceptance notes
+/SPEC.md
+/docs/FEATURE_COMPLETION_*.md
+/docs/FIRST_INJECTION_OPTIMIZATION.md
+/docs/GPU_DIRECT_SCENE.md
+/docs/GPU_SCENE_PRELOAD.md
+/docs/M[0-9]_*.md
+/docs/one-second-injection-experiment.md
+
 # Local diagnostics, editor state, and work notes
 screenshots/
 .ai-memory/

@@ -14,17 +14,17 @@
 
 ## 程序与校验
 
-- 文件：[`out/release-1.0.0/CodexWallpaperDesktop.exe`](../out/release-1.0.0/CodexWallpaperDesktop.exe)。
+- 文件：[CodexWallpaperDesktop.exe](https://github.com/whisperia6/codex-wallpaper-bridge/releases/download/v1.0.0/CodexWallpaperDesktop.exe)（Release 附件）。
 - 文件大小：102,455,559 字节（97.71 MiB）。
 - 文件版本、产品版本和打包元数据：`1.0.0`。
 - SHA-256：`991D3956D958BF5E5E40E2AC2EDA35994A2FB40DA0E7D690763B27DC90601AA7`。
-- 校验清单：[`SHA256SUMS.txt`](../out/release-1.0.0/SHA256SUMS.txt)。
+- 校验清单：[SHA256SUMS.txt](https://github.com/whisperia6/codex-wallpaper-bridge/releases/download/v1.0.0/SHA256SUMS.txt)。
 
 ## 已完成的验证
 
 - 项目测试目录中 105 个测试文件，955/955 项离线回归通过。
-- 单文件打包成功，耗时 161.216 秒；ASAR 71 条目、必要解包资源 32 文件的清单校验通过。
+- 单文件打包成功；ASAR 完整性、必要解包资源和发布文件清单校验通过。
 - 核对了打包载荷的 Windows x64 架构、版本元数据和主题资源。
-- 仓库保留第三方资源的原始字节，9 个锁定文件的 SHA-256 与源码归档 SHA-512 均已校验。
+- 仓库保留第三方资源的原始字节、必要许可和源码归档，并校验锁定文件的哈希。
 
-本次打包未启动新 EXE，也未操作当前 Codex。上述自动化和结构校验不代替真实 Store/本地 EXE 双宿主的完整验收、长期运行、实际转码或硬件设备切换验证。详见 [README 限制说明](../README.md#目前的限制) 与 [功能完成状态](FEATURE_COMPLETION_STATUS.md)。
+上述自动化和结构校验不代替真实 Store/本地 EXE 双宿主的完整验收、长期运行、实际转码或硬件设备切换验证。详见 [README 限制说明](../README.md#目前的限制)。
