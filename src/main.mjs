@@ -30,6 +30,7 @@ import { detectInstallations, selectInstallationId, validateCdpPort, validateExe
 import { runLaunchAndInjectFlow } from "./launch-flow.mjs";
 import { dailyLogFilename, formatLogEntry, sanitizeLogText } from "./local-logging.mjs";
 import { createTrayController } from "./tray-controller.mjs";
+import { desktopWindowChromeOptions, setWindowChromeTheme } from "./window-chrome.mjs";
 import { prepareAcceptanceContext } from "./acceptance-context.mjs";
 import { verifyCdpEndpointOwner } from "./cdp-owner.mjs";
 import { createPreviewSession, stopPreviewProcess } from "./preview-session.mjs";
@@ -354,6 +355,7 @@ function createMainWindow() {
     show: false,
     backgroundColor: "#0b0d0b",
     title: "Codex Wallpaper Desktop",
+    ...desktopWindowChromeOptions(process.platform),
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -473,6 +475,7 @@ function createApplicationTray() {
 
 function registerIpcHandlers() {
   registerHandler("cwb:get-state", () => currentState());
+  registerHandler("cwb:set-workbench-theme", (theme) => setWindowChromeTheme(mainWindow, theme, process.platform));
   registerHandler("cwb:refresh-installations", async () => {
     const state = await currentState();
     await saveSettings();

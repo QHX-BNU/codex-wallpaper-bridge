@@ -1140,7 +1140,15 @@
     renderPlaylistStatus(payload.status);
     if (!state.effectsDirty) {
       state.effects = normalizeEffects({ ...payload.config.effects, onBattery: systemMediaSnapshot?.power.onBattery === true });
-      state.config.media = payload.config.media;
+      // Older/lightweight responses may omit media. Absence is not a request
+      // to disable a preference; merge only known, explicitly supplied booleans.
+      const media = payload.config.media;
+      if (media && typeof media === "object" && !Array.isArray(media)) {
+        state.config.media = { ...state.config.media };
+        for (const key of ["captureAudio", "nowPlaying", "allowControl", "onlineLyrics"]) {
+          if (typeof media[key] === "boolean") state.config.media[key] = media[key];
+        }
+      }
       renderEffects();
     }
     const id = payload.config.selectedId;

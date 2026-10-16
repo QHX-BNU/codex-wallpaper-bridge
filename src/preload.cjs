@@ -1,6 +1,8 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("cwbDesktop", {
+  windowChrome: process.platform === "win32",
+  setWorkbenchTheme: (theme) => ipcRenderer.invoke("cwb:set-workbench-theme", theme),
   getState: () => ipcRenderer.invoke("cwb:get-state"),
   refreshInstallations: () => ipcRenderer.invoke("cwb:refresh-installations"),
   chooseExecutable: () => ipcRenderer.invoke("cwb:choose-executable"),

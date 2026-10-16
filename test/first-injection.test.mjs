@@ -309,7 +309,7 @@ test('visible target is applied before hidden ones and hidden concurrency is bou
 test('serialized theme preflight exposes the same restore-aware theme implementation', () => {
   const bootstrap = buildBootstrapScript({ directSceneEnabled: true });
   assert.match(bootstrap, /prepareTheme: ensureDarkTheme/);
-  assert.match(bootstrap, /m3-media-policy-v2/);
+  assert.match(bootstrap, /m3-media-policy-v4/);
 });
 
 test('all-hidden startup serializes the first successful theme capture before parallel followers', async (t) => {

@@ -21,7 +21,7 @@ async function rendererBootstrap(createMediaSwitcher, runMediaTransition, create
       return { ok: false, ready: false, version: null };
     }
     const KEY = "__codexWallpaperBridgeRuntime";
-    const VERSION = "0.6.0-m3-media-policy-v2";
+    const VERSION = "0.6.0-m3-media-policy-v4";
     let nativeController = null;
     let sceneController = null;
 
@@ -700,8 +700,8 @@ async function rendererBootstrap(createMediaSwitcher, runMediaTransition, create
         const source = kind === "web"
           ? (wallpaper.webUrl || wallpaper.mediaUrl || "")
           : (wallpaper.mediaUrl || wallpaper.previewUrl || wallpaper.url || "");
-        // Owned-native mode keeps official CSP intact. Ordinary media uses native
-        // DOM elements, not executable srcdoc/loopback author iframes.
+        // Ordinary media uses DOM elements in owned-engine mode. The injector
+        // initializes loopback media access before loading these resources.
         if ((nativeEnabled || directSceneEnabled) && kind !== "web") {
           const media = document.createElement(kind === "video" ? "video" : "img");
           media.id = initial ? ids.media : `${ids.media}-pending-${revision}`; media.style.opacity = "0";
@@ -890,9 +890,11 @@ async function rendererBootstrap(createMediaSwitcher, runMediaTransition, create
         // A matching pending candidate is adopted by prepare(); a different
         // selection cancels it there. It is no longer speculative once applied.
         scenePreload = null;
-        updateMediaState("loading");
         const force = wallpaper.playable === "native" ? nativeMedia?.state(wallpaper.id).retryRequested === true
           : wallpaper.playable === "direct-gpu" && sceneMedia?.retryRequested(wallpaper.id);
+        // Reusing a committed slot does not run commit() again. Keep its actual
+        // state (including playback errors), rather than leaving it in loading.
+        if (mediaSwitcher.status().identity !== identity || force) updateMediaState("loading");
         return mediaSwitcher.switchTo({ wallpaper, effects: current.effects }, identity, { ...current.effects, force,
           loadTimeoutMs: wallpaper.playable === "direct-gpu" ? 90000 : undefined }).then((result) => {
           if (result.error) updateMediaState("error", result.error);
@@ -1027,8 +1029,6 @@ async function rendererBootstrap(createMediaSwitcher, runMediaTransition, create
       };
 
       const apply = (payload) => {
-        const hadActive = Boolean(currentMediaIdentity);
-        const previousIdentity = currentMediaIdentity;
         const requested = {
           wallpaper: payload?.wallpaper || null,
           fallbackReason: ["embedded_video", "custom_static", "preview", "empty"].includes(payload?.fallbackReason) ? payload.fallbackReason : null,
@@ -1051,10 +1051,9 @@ async function rendererBootstrap(createMediaSwitcher, runMediaTransition, create
           updateVisibilityHandler();
           startObserver();
           const theme = await themePromise;
-          const switchResult = ["native", "direct-gpu"].includes(requested.wallpaper?.playable)
-            || (hadActive && previousIdentity !== mediaIdentity(requested.wallpaper)) ? await mediaOperation : null;
+          const switchResult = await mediaOperation;
           return {
-            ok: switchResult?.ok !== false,
+            ok: switchResult?.ok === true,
             deferred: requested === current && requested.wallpaper?.playable === "direct-gpu"
               && document.hidden && switchResult?.cancelled === true,
             switchResult,

@@ -1135,7 +1135,7 @@ export class MediaServer {
       if (route === 'api/playlists' && request.method === 'GET') {
         const config = await this.#configStore.get();
         const stateOnly = new URL(request.url, this.origin).searchParams.get('state') === '1';
-        json(response, 200, { config: { selectedId: config.selectedId, effects: config.effects,
+        json(response, 200, { config: { selectedId: config.selectedId, effects: config.effects, media: config.media,
           ...(!stateOnly ? { playlists: config.playlists } : {}) }, revision: this.#configStore.revision, status: this.#playlists.status() });
         return;
       }

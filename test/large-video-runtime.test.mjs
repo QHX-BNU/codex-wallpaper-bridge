@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 
 import { CdpWallpaperInjector } from "../bridge-overrides/src/cdp-injector.mjs";
 import { buildInjectionPlan } from "../bridge-runtime/src/injection-plan.mjs";
@@ -45,6 +46,7 @@ function injection(id = "large-video") {
 
 function fakeSession() {
   const calls = [];
+  const globals = {};
   const eventHandlers = new Map();
   const session = {
     target: { id: "target-1" },
@@ -54,6 +56,7 @@ function fakeSession() {
       async call(method, params = {}) {
         calls.push({ method, params });
         if (method === "Page.reload") {
+          delete globals.__cwbDocumentReload;
           queueMicrotask(() => {
             for (const handler of eventHandlers.get("Page.loadEventFired") || []) handler({});
           });
@@ -63,6 +66,13 @@ function fakeSession() {
           return { identifier: "bootstrap-1" };
         }
         if (method === "Runtime.evaluate") {
+          if (params.expression.endsWith(".prepareTheme()")) {
+            return { result: { value: { state: "dark", reloadRequired: false } } };
+          }
+          if (params.expression.startsWith("globalThis.__cwbDocumentReload")) {
+            return { result: { value: runInNewContext(params.expression, { globalThis: globals,
+              location: { origin: "app://-" }, document: { body: {}, readyState: "interactive" } }) } };
+          }
           if (params.expression.includes("runtime.apply")) {
             return {
               result: {
@@ -70,7 +80,7 @@ function fakeSession() {
                   ok: true,
                   runtimeReady: true,
                   domReady: true,
-                  media: { state: "loading" },
+                  media: { state: "ready" },
                 },
               },
             };
@@ -167,9 +177,10 @@ test("injector installs bootstrap once and applies lightweight config separately
   assert.equal(calls.filter(({ method }) => method.startsWith("Fetch.")).length, 0);
   assert.equal(calls.filter(({ method }) => method === "Page.addScriptToEvaluateOnNewDocument").length, 1);
   const evaluations = calls.filter(({ method }) => method === "Runtime.evaluate");
-  assert.equal(evaluations.length, 3);
+  assert.equal(calls.filter(({ method }) => method === "Page.reload").length, 1);
+  assert.equal(evaluations.filter(({ params }) => params.expression.endsWith(".prepareTheme()")).length, 3);
   assert.equal(evaluations.filter(({ params }) => params.expression.includes("runtime.apply")).length, 2);
-  assert.equal(evaluations.filter(({ params }) => !params.expression.includes("runtime.apply")).length, 1);
+  assert.equal(evaluations.filter(({ params }) => params.expression === plan.bootstrapScript).length, 2);
 
   assert.ok(statuses.some(({ type }) => type === "injection-ready"));
 });
@@ -203,7 +214,7 @@ test("injector reloads and reapplies once when the official theme needs rehydrat
             runtimeReady: true,
             domReady: true,
             theme: { reloadRequired: applyCount === 1 },
-            media: { state: "loading" },
+            media: { state: "ready" },
           },
         },
       };
@@ -213,7 +224,7 @@ test("injector reloads and reapplies once when the official theme needs rehydrat
 
   await injector.installScript(session, injection());
 
-  assert.equal(calls.filter(({ method }) => method === "Page.reload").length, 1);
+  assert.equal(calls.filter(({ method }) => method === "Page.reload").length, 2, "media initialization plus the late theme fallback");
   assert.equal(calls.filter(({ method, params }) =>
     method === "Runtime.evaluate" && params.expression.includes("runtime.apply")).length, 2);
 });
@@ -233,7 +244,7 @@ test("a cached theme reload request is consumed once across repeated configurati
   await injector.installScript(session, injection());
   await injector.installScript(session, injection());
 
-  assert.equal(calls.filter(({ method }) => method === "Page.reload").length, 1);
+  assert.equal(calls.filter(({ method }) => method === "Page.reload").length, 2, "a cached request must not add another reload");
   assert.equal(calls.filter(({ method, params }) =>
     method === "Runtime.evaluate" && params.expression.includes("runtime.apply")).length, 3);
 });
@@ -332,7 +343,7 @@ test("runtime switches to dark and restores the saved Codex appearance theme", (
   const bootstrap = buildBootstrapScript();
   const apply = buildApplyScript({ wallpaper: null });
   const restore = buildRestoreScript();
-  assert.match(bootstrap, /0\.6\.0-m3-media-policy-v2/);
+  assert.match(bootstrap, /0\.6\.0-m3-media-policy-v4/);
   assert.match(bootstrap, /vscode:\/\/codex\/\$\{operation\}/);
   assert.match(bootstrap, /get-setting/);
   assert.match(bootstrap, /set-setting/);

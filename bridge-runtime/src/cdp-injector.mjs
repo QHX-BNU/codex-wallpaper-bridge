@@ -5,6 +5,9 @@ import { NativeEngineDelivery } from "../../bridge-runtime/src/native-engine-del
 import { DirectSceneDelivery } from "../../bridge-runtime/src/direct-scene-delivery.mjs";
 
 const SCRIPT_TIMEOUT_MS = 15_000;
+// Owned media keeps its existing 15 s load gate. Leave room for that gate to
+// report failure and dispose the candidate before the CDP request expires.
+const MEDIA_APPLY_TIMEOUT_MS = 20_000;
 const GPU_APPLY_TIMEOUT_MS = 105_000;
 let nextTimingId = 0;
 const STAGE_LABELS = {
@@ -55,7 +58,8 @@ function normalizeInjection(value) {
     && Buffer.byteLength(entry.script, 'utf8') <= 10000).slice(0, 4).map(entry => ({ reason: entry.reason, script: entry.script })) : [];
   return { bootstrapScript, applyScript, compatibilityScript, compatibilityRestoreScript, fallbackScripts,
     nativeEnabled: value.nativeEnabled === true, nativeWallpaperId,
-    directSceneEnabled: value.directSceneEnabled === true, directSceneId };
+    directSceneEnabled: value.directSceneEnabled === true, directSceneId,
+    requiresMediaCsp: value.requiresMediaCsp === true || directSceneId !== null };
 }
 
 function runtimeValue(result) {
@@ -63,6 +67,11 @@ function runtimeValue(result) {
     throw new Error(result.exceptionDetails.text || "Renderer injection failed");
   }
   return result?.result?.value;
+}
+
+function appliedMediaReady(value) {
+  return value?.ok === true && value.runtimeReady === true && value.domReady === true
+    && value.switchResult?.ok !== false && !['loading', 'error', 'play-rejected'].includes(value.media?.state || value.mediaState);
 }
 
 function isTargetConnectionFailure(error) {
@@ -242,6 +251,7 @@ export class CdpWallpaperInjector {
     this.nativeWallpaperId = null;
     this.directSceneEnabled = false;
     this.directSceneId = null;
+    this.requiresMediaCsp = false;
     this.fallbackScripts = [];
     this.scenePreloadVersion = 0;
     this.scenePreloadKey = null;
@@ -353,7 +363,7 @@ export class CdpWallpaperInjector {
         await socket.call("Runtime.enable");
       });
       if (this.restoring || lifecycleVersion !== this.lifecycleVersion) throw new Error("Renderer restoration is in progress");
-      bypassCspRequested = previous?.gpuCspInitialized === true || (!this.nativeEnabled && !this.directSceneEnabled);
+      bypassCspRequested = previous?.gpuCspInitialized === true || (!this.nativeEnabled && !this.directSceneEnabled && !this.requiresMediaCsp);
       await socket.call("Page.setBypassCSP", { enabled: bypassCspRequested });
       session = {
         target,
@@ -387,7 +397,8 @@ export class CdpWallpaperInjector {
           compatibilityScript: this.compatibilityScript,
           compatibilityRestoreScript: this.compatibilityRestoreScript,
           nativeEnabled: this.nativeEnabled, nativeWallpaperId: this.nativeWallpaperId,
-          directSceneEnabled: this.directSceneEnabled, directSceneId: this.directSceneId, fallbackScripts: this.fallbackScripts
+          directSceneEnabled: this.directSceneEnabled, directSceneId: this.directSceneId, fallbackScripts: this.fallbackScripts,
+          requiresMediaCsp: this.requiresMediaCsp
         }, { timing });
         // This proof is for the just-opened socket's immediate initialization
         // only, not a cache for later Scene selections or reconnections.
@@ -737,20 +748,20 @@ export class CdpWallpaperInjector {
       );
       session.newDocumentId = installed.identifier || null;
     }
-    if (injection.directSceneId && !session.gpuCspInitialized) {
+    if (injection.requiresMediaCsp && !session.gpuCspInitialized) {
       // Chromium applies CSP bypass at document initialization, not to an
-      // already loaded Codex document. This is one reload on first GPU use,
-      // not one reload per setting change or Scene switch.
-      if (!this.sceneDelivery || typeof this.verifyEndpoint !== "function"
+      // already loaded Codex document. Loopback video/image/srcdoc need this
+      // just as much as GPU scenes. Initialize once, not on every media switch.
+      if ((injection.nativeEnabled || injection.directSceneEnabled) && (typeof this.verifyEndpoint !== "function"
         || session.socket.closed === true
-        || (!session.attachmentVerified && (await this.measureStage(timing, "owner", () => this.verifyEndpoint(this.port)))?.verified !== true)) throw new Error("Native CDP endpoint is not identity-verified");
+        || (!session.attachmentVerified && (await this.measureStage(timing, "owner", () => this.verifyEndpoint(this.port)))?.verified !== true))) throw new Error("Native CDP endpoint is not identity-verified");
       session.attachmentVerified = false;
       const beforeReload = session.lastApplied;
       session.themeReloading = true;
       try {
         // Warm raw bytes only while host/theme initialization is in progress.
         // Real prepare still checks current files/policy and vendor hashes.
-        void this.sceneDelivery.warm(injection.directSceneId).catch(() => {});
+        if (injection.directSceneId) void this.sceneDelivery.warm(injection.directSceneId).catch(() => {});
         await this.ensureRuntime(session, injection, timing);
         const theme = await this.measureStage(timing, "theme", () => this.evaluateScript(session,
           "globalThis.__codexWallpaperBridgeRuntime.prepareTheme()"));
@@ -775,7 +786,7 @@ export class CdpWallpaperInjector {
     // The host may settle its theme only after React mounts in the new
     // document. If it still requests a refresh, do that BEFORE creating the
     // first Scene, not after paying for a first frame that will be discarded.
-    if (injection.directSceneId && !session.sceneLease && allowThemeReload && !session.themeReloadHandled) {
+    if (injection.requiresMediaCsp && !session.sceneLease && allowThemeReload && !session.themeReloadHandled) {
       const theme = await this.measureStage(timing, "theme", () => this.evaluateScript(session,
         "globalThis.__codexWallpaperBridgeRuntime.prepareTheme()"));
       if (typeof theme?.reloadRequired !== "boolean") throw new Error("Renderer theme preparation failed");
@@ -817,12 +828,13 @@ export class CdpWallpaperInjector {
           }
         }
         if (this.restoring) throw new Error("Renderer restoration is in progress");
-        apply = await this.measureStage(timing, "apply", () => this.evaluateScript(session, injection.applyScript, injection.directSceneId ? GPU_APPLY_TIMEOUT_MS : SCRIPT_TIMEOUT_MS));
+        const applyTimeout = injection.directSceneId ? GPU_APPLY_TIMEOUT_MS : MEDIA_APPLY_TIMEOUT_MS;
+        apply = await this.measureStage(timing, "apply", () => this.evaluateScript(session, injection.applyScript, applyTimeout));
         if (injection.directSceneId && apply?.deferred === true) {
           if (sceneCandidate) await sceneCandidate.release();
           return defer();
         }
-        if (apply?.ok !== true || apply.runtimeReady !== true || apply.domReady !== true) {
+        if (!appliedMediaReady(apply)) {
           throw Object.assign(new Error("Renderer DOM application verification failed"), {
             cwbMediaState: apply?.media?.state || apply?.mediaState,
             cwbSwitchFailure: apply?.switchResult?.error,
@@ -853,8 +865,8 @@ export class CdpWallpaperInjector {
         apply = null;
         for (const fallback of injection.fallbackScripts) {
           try {
-            const value = await this.evaluateScript(session, fallback.script, SCRIPT_TIMEOUT_MS);
-            if (value?.ok === true && value.runtimeReady === true && value.domReady === true) {
+            const value = await this.evaluateScript(session, fallback.script, MEDIA_APPLY_TIMEOUT_MS);
+            if (appliedMediaReady(value)) {
               apply = { ...value, degraded: true, fallbackReason: fallback.reason }; break;
             }
           } catch {}
@@ -864,7 +876,7 @@ export class CdpWallpaperInjector {
       }
       if (!apply?.degraded) session.fallbackFor = null;
       timing.applyMs += performance.now() - applyStartedAt;
-      if (apply?.ok !== true || apply.runtimeReady !== true || apply.domReady !== true) {
+      if (!appliedMediaReady(apply)) {
         throw new Error("Renderer DOM application verification failed");
       }
       if (allowThemeReload && !session.themeReloadHandled && apply.theme?.reloadRequired === true) {
@@ -943,7 +955,8 @@ export class CdpWallpaperInjector {
         compatibilityScript: this.compatibilityScript,
         compatibilityRestoreScript: this.compatibilityRestoreScript,
         nativeEnabled: this.nativeEnabled, nativeWallpaperId: this.nativeWallpaperId,
-        directSceneEnabled: this.directSceneEnabled, directSceneId: this.directSceneId, fallbackScripts: this.fallbackScripts
+        directSceneEnabled: this.directSceneEnabled, directSceneId: this.directSceneId, fallbackScripts: this.fallbackScripts,
+        requiresMediaCsp: this.requiresMediaCsp
       },
       { updateReloadHook: false }
     ).catch((error) => {
@@ -1003,6 +1016,7 @@ export class CdpWallpaperInjector {
     this.nativeWallpaperId = injection.nativeWallpaperId;
     this.directSceneEnabled = injection.directSceneEnabled;
     this.directSceneId = injection.directSceneId;
+    this.requiresMediaCsp = injection.requiresMediaCsp;
     this.fallbackScripts = injection.fallbackScripts;
     this.planVersion += 1;
     this.scenePreloadVersion += 1;
@@ -1119,6 +1133,7 @@ export class CdpWallpaperInjector {
       this.nativeWallpaperId = injection.nativeWallpaperId;
       this.directSceneEnabled = injection.directSceneEnabled;
       this.directSceneId = injection.directSceneId;
+      this.requiresMediaCsp = injection.requiresMediaCsp;
       this.fallbackScripts = injection.fallbackScripts;
       this.planVersion += 1;
     }

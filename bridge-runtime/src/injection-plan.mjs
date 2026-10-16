@@ -126,6 +126,7 @@ export function buildInjectionPlan({ server, config, inventory, nativeEnabled = 
     nativeWallpaperId: wallpaper?.playable === "native" ? wallpaper.id : null,
     directSceneEnabled: directSceneEnabled === true,
     directSceneId: wallpaper?.playable === "direct-gpu" ? wallpaper.id : null,
+    requiresMediaCsp: Boolean(wallpaper?.mediaUrl || wallpaper?.playable === "direct-gpu"),
     fallbackScripts,
     metrics: {
       bootstrapBytes: Buffer.byteLength(bootstrapScript, "utf8"),

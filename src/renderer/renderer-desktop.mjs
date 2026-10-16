@@ -11,7 +11,11 @@ function savedWorkbenchTheme() {
 const elements = {
   controlFrame: document.querySelector("#controlFrame"),
   controlPlaceholder: document.querySelector("#controlPlaceholder"),
+  desktopTitlebar: document.querySelector("#desktopTitlebar"),
+  desktopConnectionStatus: document.querySelector("#desktopConnectionStatus"),
 };
+if (api.windowChrome === true) elements.desktopTitlebar.hidden = false;
+let titlebarThemeRevision = 0;
 const state = {
   installations: [],
   selectedId: null,
@@ -34,6 +38,13 @@ function applyWorkbenchTheme(theme) {
   state.workbenchTheme = theme;
   if (document.documentElement) document.documentElement.dataset.workbenchTheme = theme;
   try { window.localStorage.setItem(WORKBENCH_THEME_KEY, theme); } catch { /* Theme still works for this session. */ }
+  if (api.windowChrome === true) {
+    const revision = ++titlebarThemeRevision;
+    void api.setWorkbenchTheme(theme).then(
+      result => { if (revision === titlebarThemeRevision) document.documentElement.dataset.titlebarThemeSync = result.supported ? "ready" : "unsupported"; },
+      () => { if (revision === titlebarThemeRevision) document.documentElement.dataset.titlebarThemeSync = "failed"; },
+    );
+  }
 }
 applyWorkbenchTheme(state.workbenchTheme);
 
@@ -57,10 +68,18 @@ function trustedControlUrl(rawUrl) {
   return parsed.href;
 }
 
-function showPlaceholder(title, detail) {
+function setTitlebarConnection(connection) {
+  if (api.windowChrome !== true) return;
+  const labels = { connecting: "正在连接本地服务", connected: "本地服务已连接", disconnected: "本地服务连接已断开", error: "本地服务连接失败" };
+  elements.desktopConnectionStatus.dataset.state = connection;
+  elements.desktopConnectionStatus.textContent = labels[connection];
+}
+
+function showPlaceholder(title, detail, connection = "connecting") {
   elements.controlPlaceholder.hidden = false;
   elements.controlPlaceholder.querySelector("strong").textContent = title;
   elements.controlPlaceholder.querySelector("p").textContent = detail;
+  setTitlebarConnection(connection);
 }
 
 function desktopPayload() {
@@ -136,7 +155,7 @@ async function ensureControlPanel({ port = state.port, forceReload = false } = {
     return await state.controlLoadPromise;
   } catch (error) {
     state.controlReady = false;
-    showPlaceholder("壁纸工作台载入失败", error.message);
+    showPlaceholder("壁纸工作台载入失败", error.message, "error");
     throw error;
   } finally {
     state.controlLoadPromise = null;
@@ -249,6 +268,7 @@ window.addEventListener("message", (event) => {
 
   if (message.type === "ready") {
     state.controlReady = true;
+    setTitlebarConnection("connected");
     elements.controlPlaceholder.hidden = true;
     sendDesktopState();
     return;
@@ -269,7 +289,7 @@ window.addEventListener("message", (event) => {
 api.onTrayAction((action) => {
   if (action === "control-disconnected") {
     state.controlReady = false;
-    showPlaceholder("壁纸工作台连接已断开", "正在尝试重新连接…");
+    showPlaceholder("壁纸工作台连接已断开", "正在尝试重新连接…", "disconnected");
     void ensureControlPanel({ port: state.port, forceReload: true }).catch(() => {});
     return;
   }
@@ -290,7 +310,7 @@ async function initialize() {
     updateDesktopState(await api.getState());
     await ensureControlPanel({ port: state.port });
   } catch (error) {
-    showPlaceholder("壁纸工作台启动失败", error.message);
+    showPlaceholder("壁纸工作台启动失败", error.message, "error");
   }
 }
 

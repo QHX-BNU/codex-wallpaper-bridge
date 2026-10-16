@@ -4,7 +4,16 @@
 
 目前面向 Microsoft Store 版和本地 EXE 版 Codex。程序不修改 Codex 的安装文件，不想用时可以恢复原来的外观。这是一个非官方项目，与 OpenAI 和 Wallpaper Engine 官方无关。
 
-**当前版本：`1.0.0`（正式版）。** 下文介绍本版提供的功能；旧版 EXE 不代表已包含全部更新。完整双版本兼容性和长期稳定性仍在验证，具体边界见[目前的限制](#目前的限制)。
+**当前版本：`1.1.0`（正式版）。** 下文介绍本版提供的功能；旧版 EXE 不代表已包含全部更新。完整双版本兼容性和长期稳定性仍在验证，具体边界见[目前的限制](#目前的限制)。
+
+### 1.1.0 更新摘要
+
+- 修复首次选择视频时只切换主题、壁纸却未成功加载的问题；应用结果等待实际媒体就绪。
+- 改进 Codex 工具栏、空间/插件页面和聊天输入区的透明兼容，修复长聊天底部再次出现黑底。
+- 修复系统音乐选项被轮询刷回关闭，以及复用当前壁纸时重复保存/应用报错。
+- 工作台改为随深浅主题变化的融合顶栏，保留 Windows 原生窗口按钮，并显示本地服务连接状态。
+
+完整改动、验证与已知限制见 [1.1.0 版本说明](docs/RELEASE_1.1.0.md)。
 
 ## 界面预览
 
@@ -141,7 +150,7 @@ npm start
 
 程序通过本机调试接口（CDP）在所选 Codex 页面中加入背景层，再从本机媒体服务读取图片、视频或场景资源。它不是安装包补丁，也不会给 Codex 永久替换一套界面。
 
-媒体和控制服务只监听 `127.0.0.1`，使用随机令牌，并检查写请求来源。GPU Scene/Web 模式会临时调整目标页面的 CSP 限制；恢复外观时会执行还原。网页壁纸包含作者脚本，适合加载你信任的本地项目，不能把它当成任意网页的安全运行环境。
+媒体和控制服务只监听 `127.0.0.1`，使用随机令牌，并检查写请求来源。图片、视频及 GPU Scene/Web 媒体注入会临时调整目标页面的 CSP 限制，首次初始化可能需要刷新目标页面；恢复外观时会执行还原。网页壁纸包含作者脚本，适合加载你信任的本地项目，不能把它当成任意网页的安全运行环境。
 
 壁纸设置保存在本机；旧配置升级前会备份，损坏或版本过新的配置不会被静默覆盖。Wallpaper Engine 原件只读。运行日志默认位于 `%LOCALAPPDATA%\CodexWallpaperDesktop\logs`，可从托盘打开；日志中的会话 URL 会脱敏。
 
@@ -154,15 +163,15 @@ npm start
 - 长时间运行的资源占用仍需验证，部分场景已观察到内存增长。不承诺固定首帧时间、帧率或资源占用。
 - 导入任务不支持断点续传；资源库和缓存迁移会保留旧副本，需要额外磁盘空间。
 
-分区玻璃主题、字体与光标设置、壁纸配色联动、头像/桌宠和多语言属于后续计划，不包含在目前功能中。本版更新及验证范围见 [1.0.0 版本说明](docs/RELEASE_1.0.0.md)。
+分区玻璃主题、字体与光标设置、壁纸配色联动、头像/桌宠和多语言属于后续计划，不包含在目前功能中。本版更新及验证范围见 [1.1.0 版本说明](docs/RELEASE_1.1.0.md)。
 
 ## 下载与构建
 
 已发布的程序见 [GitHub Releases](https://github.com/whisperia6/codex-wallpaper-bridge/releases)。下载前请看对应版本说明，当前分支中的新功能不一定已经打包发布。
 
-**2026-10-15 构建的 `1.0.0` 正式版**：[下载单文件 EXE](https://github.com/whisperia6/codex-wallpaper-bridge/releases/download/v1.0.0/CodexWallpaperDesktop.exe)（Windows x64，97.71 MiB）。成品仅通过 [Release 附件](https://github.com/whisperia6/codex-wallpaper-bridge/releases/tag/v1.0.0)分发，不提交到源码目录。功能与验证范围见 [1.0.0 版本说明](docs/RELEASE_1.0.0.md)和[目前的限制](#目前的限制)。
+**2026-10-16 构建的 `1.1.0` 正式版**：[下载单文件 EXE](https://github.com/whisperia6/codex-wallpaper-bridge/releases/download/v1.1.0/CodexWallpaperDesktop.exe)（Windows x64，97.71 MiB）。成品仅通过 [Release 附件](https://github.com/whisperia6/codex-wallpaper-bridge/releases/tag/v1.1.0)分发，不提交到源码目录。功能与验证范围见 [1.1.0 版本说明](docs/RELEASE_1.1.0.md)和[目前的限制](#目前的限制)。
 
-SHA-256：`991D3956D958BF5E5E40E2AC2EDA35994A2FB40DA0E7D690763B27DC90601AA7`（[校验文件](https://github.com/whisperia6/codex-wallpaper-bridge/releases/download/v1.0.0/SHA256SUMS.txt)）。
+SHA-256：`89EEEA59F315D322A59F94C6BEF4A48B305E33EC18BB97411121459478BEEF1E`（[校验文件](https://github.com/whisperia6/codex-wallpaper-bridge/releases/download/v1.1.0/SHA256SUMS.txt)）。
 
 自行构建 Windows 单文件版：
 
@@ -205,7 +214,7 @@ node --test test/m3-provider-recovery.test.mjs test/m3-workbench-readiness.test.
 
 提交问题时，请附上 Codex 版本、Store/本地版、壁纸类型、复现步骤和相关错误信息。日志发出前请去掉聊天内容、账号信息及个人路径。项目配置、媒体素材、测试产物和本地工作记录不需要一起提交。
 
-更多文档：[运行时说明](bridge-runtime/README.md) · [Web 壁纸接口](docs/WEB_API.md) · [1.0.0 版本说明](docs/RELEASE_1.0.0.md)
+更多文档：[运行时说明](bridge-runtime/README.md) · [Web 壁纸接口](docs/WEB_API.md) · [1.1.0 版本说明](docs/RELEASE_1.1.0.md) · [1.0.0 版本说明](docs/RELEASE_1.0.0.md)
 
 ## 第三方组件
 

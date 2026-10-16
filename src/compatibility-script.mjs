@@ -42,6 +42,31 @@ const semanticSelector = `
   [data-testid*="composer" i]
 `;
 
+// These nested surfaces paint independently of the already-transparent shell.
+// Keep their borders, focus rings, typography and child controls untouched.
+const inlinePageHeaderSelector = `
+  [data-app-shell-inline-page-header] [data-sticky][class*="_shell_"]:has(> [class*="_content_"] > [class*="_headerRow_"])
+`;
+const composerSpacerFadeSelector = `
+  .thread-scroll-container [class~="pointer-events-none"][class~="sticky"][class~="bottom-0"] > div[class~="pointer-events-none"][class~="absolute"][class~="bg-gradient-to-t"][class~="from-surface"]
+`;
+const threadFooterSelector = `.thread-scroll-container > [data-thread-scroll-footer]`;
+const nestedSurfaceSelector = `
+  [data-app-shell-header-edge-scroll="true"] :is([data-app-shell-header-toolbar], [class*="_Toolbar_"]) > :not([data-app-shell-thread-content-overlap]),
+  [data-app-shell-page-header],
+  [data-app-shell-overlay-page-header],
+  [data-composer-surface-variant] > [data-composer-body],
+  ${inlinePageHeaderSelector},
+  :is(${inlinePageHeaderSelector}) > [class*="_content_"] > [class*="_headerRow_"],
+  ${composerSpacerFadeSelector},
+  ${threadFooterSelector},
+  :is(${threadFooterSelector}) > div[class~="pointer-events-none"][class~="absolute"][class~="inset-x-0"]:is([class~="bg-surface"], [class~="bg-surface-secondary"])
+`;
+const protectedSurfaceSelector = `
+  dialog, [role="dialog"], [role="alertdialog"], [role="menu"],
+  [role="listbox"], [role="tooltip"], [popover], [data-radix-popper-content-wrapper]
+`;
+
 function adaptiveRuntimeSource() {
   return `
     const autoState = new Map();
@@ -165,6 +190,19 @@ export function buildCompatibilityScript({ adaptive = true } = {}) {
         backdrop-filter: none !important;
         -webkit-backdrop-filter: none !important;
       }
+      html[${ROOT_ATTRIBUTE}="active"] :is(${nestedSurfaceSelector}):not(
+        button, input, textarea, select, option, [contenteditable="true"],
+        [role="button"], [role="textbox"], [role="searchbox"], [role="menuitem"], [role="option"]
+      ):not(:is(${protectedSurfaceSelector})):not(:is(${protectedSurfaceSelector}) *) {
+        background-color: transparent !important;
+        background-image: none !important;
+      }
+      html[${ROOT_ATTRIBUTE}="active"] :is(${inlinePageHeaderSelector}):not(
+        :is(${protectedSurfaceSelector})
+      ):not(:is(${protectedSurfaceSelector}) *)::before {
+        background-color: transparent !important;
+        background-image: none !important;
+      }
       html[${ROOT_ATTRIBUTE}="active"] :is(
         [data-app-shell-main-content-top-fade],
         [class*="_MainContentTopFade_"],
@@ -209,7 +247,7 @@ export function buildCompatibilityScript({ adaptive = true } = {}) {
       if (window[runtimeKey]?.restore === restore) delete window[runtimeKey];
       return true;
     };
-    window[runtimeKey] = { restore, adaptive: ${adaptive ? "true" : "false"}, version: "0.1.1" };
+    window[runtimeKey] = { restore, adaptive: ${adaptive ? "true" : "false"}, version: "0.1.4" };
     return { ok: true, adaptive: ${adaptive ? "true" : "false"} };
   })()`;
 }

@@ -13,6 +13,7 @@ import { dailyLogFilename, formatLogEntry, sanitizeLogText } from "../src/local-
 import { createPreviewSession, stopPreviewProcess } from "../src/preview-session.mjs";
 import { DESKTOP_RENDERER_URL } from "../bridge-runtime/src/desktop-origin.mjs";
 import { registerDesktopRendererScheme } from "../src/desktop-renderer-protocol.mjs";
+import { desktopWindowChromeOptions, setWindowChromeTheme } from "../src/window-chrome.mjs";
 
 const mainUrl = new URL("../src/main.mjs", import.meta.url);
 const mainSource = (await readFile(mainUrl, "utf8"))
@@ -64,15 +65,20 @@ async function harness(context, { acceptance = true, endpointReady = true, autoE
     },
   });
   class FakeWindow extends EventEmitter {
-    constructor() {
+    constructor(options) {
       super();
+      calls.windows ??= [];
+      calls.windows.push(this);
+      this.options = copy(options);
       this.webContents = new EventEmitter();
       Object.assign(this.webContents, { setWindowOpenHandler: () => {}, send: () => {}, isLoadingMainFrame: () => false });
     }
     removeMenu() {}
     loadURL(url) { calls.order.push(`loadURL:${url}`); }
     show() {}
-    hide() {}
+    hide() { calls.hidden = (calls.hidden || 0) + 1; }
+    setTitleBarOverlay(value) { (calls.overlays ??= []).push(copy(value)); }
+    setBackgroundColor(value) { (calls.backgrounds ??= []).push(value); }
     focus() {}
     restore() {}
     isDestroyed() { return false; }
@@ -83,6 +89,7 @@ async function harness(context, { acceptance = true, endpointReady = true, autoE
     Menu: {}, nativeImage: {}, session: {}, Tray: {}, shell: { openPath: async () => "" },
     protocol: { registerSchemesAsPrivileged: () => calls.order.push("register-desktop-scheme") },
     DESKTOP_RENDERER_URL, registerDesktopRendererScheme,
+    desktopWindowChromeOptions, setWindowChromeTheme,
     installDesktopRendererProtocol: async () => calls.order.push("install-desktop-protocol"),
     createDesktopEngineHost: (options) => {
       calls.nativeHosts.push(options);
@@ -118,7 +125,7 @@ async function harness(context, { acceptance = true, endpointReady = true, autoE
       },
     },
     path, fileURLToPath, pathToFileURL, URL, performance,
-    process: { execPath: "C:\\fixture-electron\\electron.exe", resourcesPath: path.join(root, "fixture-resources"), env: { LOCALAPPDATA: path.join(root, "daily-local-app-data"), KEEP_EXISTING: "kept" } },
+    process: { platform: "win32", execPath: "C:\\fixture-electron\\electron.exe", resourcesPath: path.join(root, "fixture-resources"), env: { LOCALAPPDATA: path.join(root, "daily-local-app-data"), KEEP_EXISTING: "kept" } },
     appendFile: async (filePath, content) => calls.appends.push({ filePath, content }),
     mkdir: async () => {},
     readFile: async (filePath) => { calls.reads.push(filePath); return JSON.stringify({ selectedId: savedSelectedId, port: 19335, adaptive: true }); },
@@ -175,6 +182,28 @@ async function harness(context, { acceptance = true, endpointReady = true, autoE
     ipc: (channel, payload, url = rendererUrl) => handlers.get(channel)({ senderFrame: { url } }, payload),
   };
 }
+
+test("native caption uses trusted theme-only IPC without persisting or starting a bridge", async context => {
+  const f = await harness(context);
+  assert.equal(f.calls.windows[0].options.titleBarStyle, "hidden");
+  assert.equal(f.calls.windows[0].options.titleBarOverlay.height, 40);
+  const writes = f.calls.writes.length;
+  assert.equal((await f.ipc("cwb:set-workbench-theme", "light")).supported, true);
+  assert.equal(f.calls.overlays.at(-1).color, "#edf3fa");
+  await assert.rejects(f.ipc("cwb:set-workbench-theme", "red"), /theme/i);
+  await assert.rejects(f.ipc("cwb:set-workbench-theme", "dark", "http://127.0.0.1:12345/"), /IPC/);
+  assert.equal(f.calls.overlays.length, 1);
+  assert.equal(f.calls.writes.length, writes);
+  assert.deepEqual(f.calls.starts, []); assert.deepEqual(f.calls.actions, []);
+});
+
+test("integrated caption keeps minimize and close resident in the tray", async context => {
+  const f = await harness(context), win = f.calls.windows[0];
+  let prevented = 0;
+  for (const type of ["minimize", "close"]) win.emit(type, { preventDefault() { prevented++; } });
+  assert.equal(prevented, 2); assert.equal(f.calls.hidden, 2);
+  assert.equal(f.calls.trayDestroyed, 0);
+});
 
 test("startup reuses only installation metadata and single-flights overlapping owner checks", async (context) => {
   const fixture = await harness(context, { duringAction: async (calls) => {
