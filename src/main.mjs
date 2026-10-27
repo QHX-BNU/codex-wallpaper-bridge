@@ -580,11 +580,10 @@ function registerIpcHandlers() {
       const snapshot = await measureStartupPhase("discovery", currentState);
       const installation = await resolveInstallation(installationId, snapshot);
       const normalizedPort = validateCdpPort(port);
-      let baselineProcessIds = [];
-      try {
-        const baseline = await listCodexProcesses({ executablePath: installation.path, port: normalizedPort });
-        baselineProcessIds = baseline.map(({ processId }) => processId);
-      } catch {}
+      // Reuse the process snapshot taken before applying. Every process that
+      // already existed is ignored by the takeover watcher; only a Codex
+      // process created after this point may trigger a reclaim.
+      const baselineProcessIds = installation.processIds || [];
       const flow = await runLaunchAndInjectFlow({
         installation,
         runningInstallations: snapshot.installations.filter(({ isRunning }) => isRunning),
