@@ -515,6 +515,16 @@ async function rendererBootstrap(createMediaSwitcher, runMediaTransition, create
               backdrop-filter: none !important;
               box-shadow: none !important;
             }
+            /* Keep the thread composer readable while the outer shell stays transparent. */
+            html[data-codex-wallpaper-bridge="active"] [data-composer-placement="thread"] [data-composer-body] {
+              background-color: rgba(var(--cwb-shell-rgb), calc(var(--cwb-glass-alpha) * 1.15)) !important;
+              background-image: linear-gradient(180deg, rgba(255, 255, 255, .055), rgba(255, 255, 255, .015)) !important;
+              -webkit-backdrop-filter: blur(var(--cwb-glass-blur)) saturate(1.15) !important;
+              backdrop-filter: blur(var(--cwb-glass-blur)) saturate(1.15) !important;
+              box-shadow: 0 12px 32px rgba(0, 0, 0, var(--cwb-shell-shadow-alpha)),
+                inset 0 0 0 1px rgba(var(--cwb-shell-line-rgb), var(--cwb-shell-line-alpha)),
+                inset 0 1px 0 rgba(255, 255, 255, .06) !important;
+            }
             html[data-codex-wallpaper-bridge="active"] [class*="bg-gradient-to-t"]:has(
               + [data-pip-obstacle="thread-footer"]
             ),

@@ -13,6 +13,7 @@ test("compatibility script covers current, Store-era, and hashed shell hooks", (
   assert.match(script, /data-app-shell-left-panel-appearance/);
   assert.match(script, /data-app-shell-main-content-top-fade/);
   assert.match(script, /data-composer-placement/);
+  assert.match(script, /data-composer-body/);
   assert.match(script, /_MainContent_/);
   assert.match(script, /_Sidebar_/);
   assert.match(script, /_TitleBar_/);
@@ -111,4 +112,11 @@ test("restore script removes style, markers, inline overrides, and runtime", () 
   assert.match(script, /restore\(\)/);
   assert.match(script, /codex-wallpaper-electron-compat-style/);
   assert.match(script, /delete window\.__codexWallpaperElectronCompat/);
+});
+
+test("composer input body is excluded from compatibility clearing", () => {
+  const script = buildCompatibilityScript({ adaptive: true });
+
+  assert.doesNotMatch(script, /\[data-composer-surface-variant\] > \[data-composer-body\]/);
+  assert.match(script, /\[data-composer-body\]/);
 });

@@ -168,3 +168,13 @@ for (const playable of ['video', 'image', 'web']) {
     assert.equal(result.ok, false); assert.equal(result.switchResult.error, 'Media failed to load or decode');
   });
 }
+
+test('composer body gets a wallpaper-aware glass surface', () => {
+  const rule = source.slice(
+    source.indexOf('[data-composer-placement="thread"] [data-composer-body]'),
+    source.indexOf('html[data-codex-wallpaper-bridge="active"] [class*="bg-gradient-to-t"]'),
+  );
+  assert.match(rule, /--cwb-glass-alpha/);
+  assert.match(rule, /--cwb-glass-blur/);
+  assert.match(rule, /backdrop-filter/);
+});

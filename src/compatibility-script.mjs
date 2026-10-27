@@ -55,7 +55,6 @@ const nestedSurfaceSelector = `
   [data-app-shell-header-edge-scroll="true"] :is([data-app-shell-header-toolbar], [class*="_Toolbar_"]) > :not([data-app-shell-thread-content-overlap]),
   [data-app-shell-page-header],
   [data-app-shell-overlay-page-header],
-  [data-composer-surface-variant] > [data-composer-body],
   ${inlinePageHeaderSelector},
   :is(${inlinePageHeaderSelector}) > [class*="_content_"] > [class*="_headerRow_"],
   ${composerSpacerFadeSelector},
@@ -70,7 +69,7 @@ const protectedSurfaceSelector = `
 function adaptiveRuntimeSource() {
   return `
     const autoState = new Map();
-    const blockedSelector = "button, input, textarea, select, option, [contenteditable=true], [role=button], [role=menu], [role=menuitem], [role=dialog], [role=alertdialog]";
+    const blockedSelector = "button, input, textarea, select, option, [contenteditable=true], [data-composer-body], [role=button], [role=menu], [role=menuitem], [role=dialog], [role=alertdialog]";
     const hintPattern = /shell|surface|panel|sidebar|header|titlebar|maincontent|thread|conversation|composer|fade|chrome/i;
 
     const hasVisibleBackground = (style) => {
@@ -247,7 +246,7 @@ export function buildCompatibilityScript({ adaptive = true } = {}) {
       if (window[runtimeKey]?.restore === restore) delete window[runtimeKey];
       return true;
     };
-    window[runtimeKey] = { restore, adaptive: ${adaptive ? "true" : "false"}, version: "0.1.4" };
+    window[runtimeKey] = { restore, adaptive: ${adaptive ? "true" : "false"}, version: "0.1.5" };
     return { ok: true, adaptive: ${adaptive ? "true" : "false"} };
   })()`;
 }

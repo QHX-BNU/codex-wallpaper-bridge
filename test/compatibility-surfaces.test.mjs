@@ -63,7 +63,7 @@ for (const theme of ['dark', 'light']) {
       }
     }
   });
-  for (const surface of ['toolbar', 'spaceHeader', 'composerBody']) {
+  for (const surface of ['toolbar', 'spaceHeader']) {
     test(`${theme}: safe compatibility clears only the ${surface} background`, async () => {
       const p = (await browserProof())[theme];
       assert.notEqual(p.before[surface].background, 'rgba(0, 0, 0, 0)');
@@ -83,7 +83,7 @@ for (const theme of ['dark', 'light']) {
   test(`${theme}: React replacement and attribute repurposing do not retain transparent backgrounds`, async () => {
     const p = (await browserProof())[theme];
     assert.equal(p.safe.legacyToolbar.background, 'rgba(0, 0, 0, 0)');
-    assert.equal(p.replacement.background, 'rgba(0, 0, 0, 0)');
+    assert.equal(p.replacement.background, p.before.composerBody.background);
     assert.equal(p.repurposed.background, p.before.composerBody.background);
     assert.equal(p.repurposed.inlineStyle, p.before.composerBody.inlineStyle);
   });
@@ -99,8 +99,12 @@ for (const theme of ['dark', 'light']) {
   });
   test(`${theme}: adaptive mode also handles narrow surfaces without mutating fonts or theme`, async () => {
     const p = (await browserProof())[theme];
-    for (const id of ['toolbar', 'legacyToolbar', 'spaceHeader', 'composerBody']) {
+    for (const id of ['toolbar', 'legacyToolbar', 'spaceHeader']) {
       assert.equal(p.adaptive[id].background, 'rgba(0, 0, 0, 0)', id);
+    }
+    for (const mode of ['safe', 'adaptive']) {
+      assert.equal(p[mode].composerBody.background, p.before.composerBody.background, mode);
+      assert.equal(p[mode].composerBody.image, p.before.composerBody.image, mode);
     }
     for (const id of ['button', 'directButton', 'directRoleButton', 'search', 'editor', 'attachment', 'menuSurface', 'dialogSurface']) {
       assert.deepEqual(p.adaptive[id], p.before[id], id);
