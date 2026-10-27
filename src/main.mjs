@@ -26,6 +26,8 @@ import {
   waitForCodexTarget,
 } from "./cdp-client.mjs";
 import { closeCodexProcesses, launchCodex } from "./codex-launcher.mjs";
+import { listCodexProcesses } from "./codex-processes.mjs";
+import { createCodexTakeoverWatcher } from "./codex-takeover.mjs";
 import { detectInstallations, selectInstallationId, validateCdpPort, validateExecutable } from "./installations.mjs";
 import { runLaunchAndInjectFlow } from "./launch-flow.mjs";
 import { dailyLogFilename, formatLogEntry, sanitizeLogText } from "./local-logging.mjs";
@@ -69,6 +71,9 @@ let nativeEngineHost = null;
 // ownership result. Background CDP attachments still perform a fresh check.
 let verifiedEndpointInstallation = null;
 let pendingOwnerCheck = null;
+let codexTakeover = null;
+let takeoverContext = null;
+let takeoverRunning = false;
 const previewSession = createPreviewSession({
   start: (port, { onChild }) => startBridgePreview({
     executablePath: process.execPath,
@@ -473,6 +478,73 @@ function createApplicationTray() {
   });
 }
 
+function stopCodexTakeover() {
+  if (!codexTakeover) return;
+  codexTakeover.stop();
+  codexTakeover = null;
+  takeoverContext = null;
+}
+
+function startCodexTakeover({ installation, port, adaptive }) {
+  stopCodexTakeover();
+  if (acceptanceContext || shutdownRequested || !installation?.path) return;
+  takeoverContext = {
+    installation: { ...installation },
+    port: validateCdpPort(port),
+    adaptive: Boolean(adaptive),
+  };
+  codexTakeover = createCodexTakeoverWatcher({
+    port: takeoverContext.port,
+    intervalMs: 5_000,
+    isEnabled: () => !shutdownRequested && !isQuitting && !acceptanceContext,
+    isBusy: () => Boolean(activeOperation) || takeoverRunning,
+    listProcesses: () => listCodexProcesses({
+      executablePath: takeoverContext.installation.path,
+      port: takeoverContext.port,
+    }),
+    onTakeover: async ({ ordinary }) => {
+      if (takeoverRunning || shutdownRequested) return;
+      takeoverRunning = true;
+      const context = takeoverContext;
+      log({ stream: "system", text: `\n[自动接管] 检测到 Codex 以普通模式重新打开（${ordinary.length} 个窗口），正在恢复调试实例…\n` });
+      try {
+        const operation = await runOperation("自动接管 Codex", async () => {
+          const state = await currentState();
+          const selected = state.installations.find(({ id }) => id === context.installation.id)
+            || state.installations.find(({ path: executablePath }) => (
+              path.win32.normalize(String(executablePath || "")).toLowerCase()
+              === path.win32.normalize(String(context.installation.path || "")).toLowerCase()
+            ));
+          if (!selected) throw new Error("找不到目标 Codex 安装");
+          await closeCodexProcesses({ installation: selected, onLog: log });
+          await launchCodex({
+            installation: { ...selected, isRunning: false, processIds: [] },
+            port: context.port,
+            profileRoot: path.join(app.getPath("userData"), "codex-profiles"),
+            onLog: log,
+          });
+          await waitForCodexTarget(context.port);
+          await verifySelectedOwner(selected, context.port);
+          await injectOnceAtPort({ port: context.port, adaptive: context.adaptive });
+          return { restored: true };
+        });
+        if (!operation.ok) {
+          log({ stream: "stderr", text: `[自动接管] 未完成：${operation.message}\n` });
+        } else {
+          log({ stream: "system", text: "[自动接管] 完成，壁纸已恢复到调试实例\n" });
+        }
+      } catch (error) {
+        log({ stream: "stderr", text: `[自动接管] 失败：${error.message}\n` });
+      } finally {
+        takeoverRunning = false;
+      }
+    },
+    onError: () => {},
+  });
+  codexTakeover.start();
+  log({ stream: "system", text: "[自动接管] 已启用：检测到普通模式 Codex 重开时会自动接管\n" });
+}
+
 function registerIpcHandlers() {
   registerHandler("cwb:get-state", () => currentState());
   registerHandler("cwb:set-workbench-theme", (theme) => setWindowChromeTheme(mainWindow, theme, process.platform));
@@ -541,6 +613,11 @@ function registerIpcHandlers() {
       });
       if (flow.canceled) return flow;
       completed = true;
+      try {
+        startCodexTakeover({ installation, port: normalizedPort, adaptive: Boolean(adaptive) });
+      } catch (error) {
+        log({ stream: "stderr", text: `[自动接管] 启用失败：${error.message}\n` });
+      }
       return {
         result: flow.launch,
         compatibility: flow.injection.compatibility,
@@ -567,6 +644,7 @@ function registerIpcHandlers() {
     }
   }));
   registerHandler("cwb:restore", ({ installationId, port } = {}) => runOperation("恢复官方外观", async () => {
+    stopCodexTakeover();
     await rememberOperationSettings({ port });
     const normalizedPort = validateCdpPort(port);
     const installation = await resolveInstallation(installationId || settings.selectedId);
@@ -608,6 +686,7 @@ if (!hasSingleInstanceLock) {
 app.on("before-quit", (event) => {
   isQuitting = true;
   shutdownRequested = true;
+  stopCodexTakeover();
   if (shutdownComplete) return;
   event.preventDefault();
   if (shutdownPromise) return;
