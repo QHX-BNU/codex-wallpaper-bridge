@@ -485,19 +485,21 @@ function stopCodexTakeover() {
   takeoverContext = null;
 }
 
-function startCodexTakeover({ installation, port, adaptive }) {
+function startCodexTakeover({ installation, port, adaptive, baselineProcessIds = [] }) {
   stopCodexTakeover();
   if (acceptanceContext || shutdownRequested || !installation?.path) return;
   takeoverContext = {
     installation: { ...installation },
     port: validateCdpPort(port),
     adaptive: Boolean(adaptive),
+    baselineProcessIds: new Set((baselineProcessIds || []).map(Number).filter(Number.isInteger)),
   };
   codexTakeover = createCodexTakeoverWatcher({
     port: takeoverContext.port,
     intervalMs: 5_000,
     isEnabled: () => !shutdownRequested && !isQuitting && !acceptanceContext,
     isBusy: () => Boolean(activeOperation) || takeoverRunning,
+    ignoredProcessIds: takeoverContext.baselineProcessIds,
     listProcesses: () => listCodexProcesses({
       executablePath: takeoverContext.installation.path,
       port: takeoverContext.port,
@@ -578,6 +580,11 @@ function registerIpcHandlers() {
       const snapshot = await measureStartupPhase("discovery", currentState);
       const installation = await resolveInstallation(installationId, snapshot);
       const normalizedPort = validateCdpPort(port);
+      let baselineProcessIds = [];
+      try {
+        const baseline = await listCodexProcesses({ executablePath: installation.path, port: normalizedPort });
+        baselineProcessIds = baseline.map(({ processId }) => processId);
+      } catch {}
       const flow = await runLaunchAndInjectFlow({
         installation,
         runningInstallations: snapshot.installations.filter(({ isRunning }) => isRunning),
@@ -614,7 +621,7 @@ function registerIpcHandlers() {
       if (flow.canceled) return flow;
       completed = true;
       try {
-        startCodexTakeover({ installation, port: normalizedPort, adaptive: Boolean(adaptive) });
+        startCodexTakeover({ installation, port: normalizedPort, adaptive: Boolean(adaptive), baselineProcessIds });
       } catch (error) {
         log({ stream: "stderr", text: `[自动接管] 启用失败：${error.message}\n` });
       }

@@ -14,6 +14,7 @@ export function createCodexTakeoverWatcher({
   isBusy = () => false,
   intervalMs = 2_500,
   requiredConsecutive = 2,
+  ignoredProcessIds = [],
   timerApi = globalThis,
 } = {}) {
   if (typeof listProcesses !== "function") throw new TypeError("缺少 Codex 进程查询函数");
@@ -28,6 +29,7 @@ export function createCodexTakeoverWatcher({
   let consecutiveOrdinary = 0;
   let lastError = null;
   let takeovers = 0;
+  const ignoredIds = new Set(ignoredProcessIds);
 
   async function poll() {
     if (stopped || polling || !isEnabled() || isBusy()) return { skipped: true };
@@ -35,19 +37,20 @@ export function createCodexTakeoverWatcher({
     try {
       const processes = await listProcesses();
       const { ordinary } = classifyCodexProcesses(processes, port);
-      if (ordinary.length === 0) {
+      const newOrdinary = ordinary.filter((process) => !ignoredIds.has(Number(process.processId)));
+      if (newOrdinary.length === 0) {
         consecutiveOrdinary = 0;
         return { ordinary: 0, pending: false };
       }
       consecutiveOrdinary += 1;
       if (consecutiveOrdinary < requiredConsecutive) {
-        return { ordinary: ordinary.length, pending: true };
+        return { ordinary: newOrdinary.length, pending: true };
       }
       consecutiveOrdinary = 0;
       takeovers += 1;
-      await onTakeover({ processes, ordinary });
+      await onTakeover({ processes, ordinary: newOrdinary });
       lastError = null;
-      return { ordinary: ordinary.length, takenOver: true };
+      return { ordinary: newOrdinary.length, takenOver: true };
     } catch (error) {
       consecutiveOrdinary = 0;
       lastError = error;

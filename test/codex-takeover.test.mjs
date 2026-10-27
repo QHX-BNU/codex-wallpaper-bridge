@@ -78,3 +78,20 @@ test("busy or disabled watcher does not query or take over", async () => {
   assert.equal(queries, 0);
   busyWatcher.stop();
 });
+test("pre-existing ordinary processes are ignored by the baseline", async () => {
+  let takeoverCount = 0;
+  const watcher = createCodexTakeoverWatcher({
+    port: 9335,
+    intervalMs: 250,
+    ignoredProcessIds: [1],
+    timerApi: { setInterval: () => 11, clearInterval: () => {} },
+    listProcesses: async () => [ordinaryProcess(1)],
+    onTakeover: async () => { takeoverCount += 1; },
+  });
+  watcher.start();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await watcher.poll();
+  await watcher.poll();
+  assert.equal(takeoverCount, 0);
+  watcher.stop();
+});
