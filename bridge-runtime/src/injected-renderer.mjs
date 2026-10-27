@@ -518,6 +518,7 @@ async function rendererBootstrap(createMediaSwitcher, runMediaTransition, create
             /* Keep the thread composer readable while the outer shell stays transparent. */
             html[data-codex-wallpaper-bridge="active"] [data-composer-placement="thread"] [data-composer-body] {
               background-color: rgba(var(--cwb-shell-rgb), calc(var(--cwb-glass-alpha) * 1.15)) !important;
+              border-radius: inherit !important;
               background-image: linear-gradient(180deg, rgba(255, 255, 255, .055), rgba(255, 255, 255, .015)) !important;
               -webkit-backdrop-filter: blur(var(--cwb-glass-blur)) saturate(1.15) !important;
               backdrop-filter: blur(var(--cwb-glass-blur)) saturate(1.15) !important;
