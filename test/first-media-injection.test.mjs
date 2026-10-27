@@ -180,3 +180,6 @@ test('composer body uses the native composer surface for one uniform tone', () =
   assert.match(rule, /background-image:\s*none/);
   assert.doesNotMatch(rule, /--cwb-glass-alpha/);
 });
+test('user message bubbles keep their native surface', () => {
+  assert.doesNotMatch(source, /\[data-user-message-bubble\]\s*,/);
+});

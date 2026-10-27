@@ -548,8 +548,8 @@ async function rendererBootstrap(createMediaSwitcher, runMediaTransition, create
               border-color: transparent !important;
               box-shadow: none !important;
             }
+            /* Keep the native user message bubble surface; only app chrome is cleared. */
             html[data-codex-wallpaper-bridge="active"] :is(
-              [data-user-message-bubble],
               [data-app-action-sidebar-thread-selected="true"],
               [class*="bg-surface-elevated-secondary/50"],
               [class*="bg-background-primary-soft/50"]
