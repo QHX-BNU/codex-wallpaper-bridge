@@ -177,5 +177,6 @@ test('composer body gets a wallpaper-aware glass surface', () => {
   assert.match(rule, /--cwb-glass-alpha/);
   assert.match(rule, /--cwb-glass-blur/);
   assert.match(rule, /border-radius:\s*inherit/);
+  assert.match(rule, /bg-\(--composer-layout-surface-background\)/);
   assert.match(rule, /backdrop-filter/);
 });

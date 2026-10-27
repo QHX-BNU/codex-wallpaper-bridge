@@ -526,6 +526,11 @@ async function rendererBootstrap(createMediaSwitcher, runMediaTransition, create
                 inset 0 0 0 1px rgba(var(--cwb-shell-line-rgb), var(--cwb-shell-line-alpha)),
                 inset 0 1px 0 rgba(255, 255, 255, .06) !important;
             }
+            /* Keep the model picker, dictation and send controls on the same glass surface. */
+            html[data-codex-wallpaper-bridge="active"] [data-composer-placement="thread"] [data-composer-body]
+              div[class*="bg-(--composer-layout-surface-background)"][class*="rounded-full"] {
+              background-color: transparent !important;
+            }
             html[data-codex-wallpaper-bridge="active"] [class*="bg-gradient-to-t"]:has(
               + [data-pip-obstacle="thread-footer"]
             ),
