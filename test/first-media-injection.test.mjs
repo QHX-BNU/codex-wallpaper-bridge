@@ -169,14 +169,14 @@ for (const playable of ['video', 'image', 'web']) {
   });
 }
 
-test('composer body gets a wallpaper-aware glass surface', () => {
+test('composer body uses the native composer surface for one uniform tone', () => {
   const rule = source.slice(
     source.indexOf('[data-composer-placement="thread"] [data-composer-body]'),
     source.indexOf('html[data-codex-wallpaper-bridge="active"] [class*="bg-gradient-to-t"]'),
   );
-  assert.match(rule, /--cwb-glass-alpha/);
-  assert.match(rule, /--cwb-glass-blur/);
+  assert.match(rule, /--composer-layout-surface-background/);
   assert.match(rule, /border-radius:\s*inherit/);
   assert.match(rule, /bg-\(--composer-layout-surface-background\)/);
-  assert.match(rule, /backdrop-filter/);
+  assert.match(rule, /background-image:\s*none/);
+  assert.doesNotMatch(rule, /--cwb-glass-alpha/);
 });

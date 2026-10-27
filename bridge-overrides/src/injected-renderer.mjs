@@ -515,16 +515,14 @@ async function rendererBootstrap(createMediaSwitcher, runMediaTransition, create
               backdrop-filter: none !important;
               box-shadow: none !important;
             }
-            /* Keep the thread composer readable while the outer shell stays transparent. */
+            /* Restore the native composer surface so the input and controls share one tone. */
             html[data-codex-wallpaper-bridge="active"] [data-composer-placement="thread"] [data-composer-body] {
-              background-color: rgba(var(--cwb-shell-rgb), calc(var(--cwb-glass-alpha) * 1.15)) !important;
+              background-color: var(--composer-layout-surface-background, rgb(54, 54, 54)) !important;
+              background-image: none !important;
               border-radius: inherit !important;
-              background-image: linear-gradient(180deg, rgba(255, 255, 255, .055), rgba(255, 255, 255, .015)) !important;
-              -webkit-backdrop-filter: blur(var(--cwb-glass-blur)) saturate(1.15) !important;
-              backdrop-filter: blur(var(--cwb-glass-blur)) saturate(1.15) !important;
-              box-shadow: 0 12px 32px rgba(0, 0, 0, var(--cwb-shell-shadow-alpha)),
-                inset 0 0 0 1px rgba(var(--cwb-shell-line-rgb), var(--cwb-shell-line-alpha)),
-                inset 0 1px 0 rgba(255, 255, 255, .06) !important;
+              box-shadow: none !important;
+              -webkit-backdrop-filter: none !important;
+              backdrop-filter: none !important;
             }
             /* Keep the model picker, dictation and send controls on the same glass surface. */
             html[data-codex-wallpaper-bridge="active"] [data-composer-placement="thread"] [data-composer-body]
