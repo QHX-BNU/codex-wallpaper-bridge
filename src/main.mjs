@@ -26,7 +26,7 @@ import {
   waitForCodexTarget,
 } from "./cdp-client.mjs";
 import { closeCodexProcesses, launchCodex } from "./codex-launcher.mjs";
-import { listCodexProcesses } from "./codex-processes.mjs";
+import { startCodexProcessMonitor } from "./codex-process-monitor.mjs";
 import { createCodexTakeoverWatcher } from "./codex-takeover.mjs";
 import { detectInstallations, selectInstallationId, validateCdpPort, validateExecutable } from "./installations.mjs";
 import { runLaunchAndInjectFlow } from "./launch-flow.mjs";
@@ -72,6 +72,8 @@ let nativeEngineHost = null;
 let verifiedEndpointInstallation = null;
 let pendingOwnerCheck = null;
 let codexTakeover = null;
+let codexProcessMonitor = null;
+let latestCodexProcesses = [];
 let takeoverContext = null;
 let takeoverRunning = false;
 const previewSession = createPreviewSession({
@@ -479,9 +481,11 @@ function createApplicationTray() {
 }
 
 function stopCodexTakeover() {
-  if (!codexTakeover) return;
-  codexTakeover.stop();
+  codexTakeover?.stop();
   codexTakeover = null;
+  codexProcessMonitor?.stop();
+  codexProcessMonitor = null;
+  latestCodexProcesses = [];
   takeoverContext = null;
 }
 
@@ -494,16 +498,24 @@ function startCodexTakeover({ installation, port, adaptive, baselineProcessIds =
     adaptive: Boolean(adaptive),
     baselineProcessIds: new Set((baselineProcessIds || []).map(Number).filter(Number.isInteger)),
   };
+  try {
+    codexProcessMonitor = startCodexProcessMonitor({
+      executablePath: takeoverContext.installation.path,
+      port: takeoverContext.port,
+      intervalMs: 3_000,
+      onSnapshot: (processes) => { latestCodexProcesses = processes; },
+      onError: (error) => log({ stream: "stderr", text: `[自动接管] 进程监控失败：${error.message}\n` }),
+    });
+  } catch (error) {
+    log({ stream: "stderr", text: `[自动接管] 进程监控启动失败：${error.message}\n` });
+  }
   codexTakeover = createCodexTakeoverWatcher({
     port: takeoverContext.port,
     intervalMs: 5_000,
     isEnabled: () => !shutdownRequested && !isQuitting && !acceptanceContext,
     isBusy: () => Boolean(activeOperation) || takeoverRunning,
     ignoredProcessIds: takeoverContext.baselineProcessIds,
-    listProcesses: () => listCodexProcesses({
-      executablePath: takeoverContext.installation.path,
-      port: takeoverContext.port,
-    }),
+    listProcesses: async () => latestCodexProcesses,
     onTakeover: async ({ ordinary }) => {
       if (takeoverRunning || shutdownRequested) return;
       takeoverRunning = true;
