@@ -20,9 +20,11 @@ while ($true) {
     }
     $pathMatch -and $_.CommandLine -notmatch '--type='
   } | ForEach-Object {
+    $process = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
     [pscustomobject]@{
       ProcessId = [int]$_.ProcessId
       CommandLine = [string]$_.CommandLine
+      MainWindowHandle = if ($process) { [int64]$process.MainWindowHandle } else { [int64]0 }
     }
   })
   [pscustomobject]@{ type = 'snapshot'; processes = $items } | ConvertTo-Json -Compress -Depth 4

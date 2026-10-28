@@ -26,6 +26,7 @@ import {
   waitForCodexTarget,
 } from "./cdp-client.mjs";
 import { closeCodexProcesses, launchCodex } from "./codex-launcher.mjs";
+import { classifyCodexProcesses } from "./codex-processes.mjs";
 import { startCodexProcessMonitor } from "./codex-process-monitor.mjs";
 import { createCodexTakeoverWatcher } from "./codex-takeover.mjs";
 import { detectInstallations, selectInstallationId, validateCdpPort, validateExecutable } from "./installations.mjs";
@@ -74,6 +75,7 @@ let pendingOwnerCheck = null;
 let codexTakeover = null;
 let codexProcessMonitor = null;
 let latestCodexProcesses = [];
+let staleCleanupTimer = null;
 let takeoverContext = null;
 let takeoverRunning = false;
 const previewSession = createPreviewSession({
@@ -485,6 +487,8 @@ function stopCodexTakeover() {
   codexTakeover = null;
   codexProcessMonitor?.stop();
   codexProcessMonitor = null;
+  clearTimeout(staleCleanupTimer);
+  staleCleanupTimer = null;
   latestCodexProcesses = [];
   takeoverContext = null;
 }
@@ -556,6 +560,26 @@ function startCodexTakeover({ installation, port, adaptive, baselineProcessIds =
     onError: () => {},
   });
   codexTakeover.start();
+  const cleanStaleProcesses = () => {
+    if (shutdownRequested || !takeoverContext) return;
+    if (latestCodexProcesses.length === 0) {
+      staleCleanupTimer = setTimeout(cleanStaleProcesses, 3_000);
+      staleCleanupTimer.unref?.();
+      return;
+    }
+    const { ordinary } = classifyCodexProcesses(latestCodexProcesses, takeoverContext.port);
+    const stale = ordinary.filter((entry) => (
+      takeoverContext.baselineProcessIds.has(entry.processId) && entry.mainWindowHandle === 0
+    ));
+    for (const entry of stale) {
+      try {
+        process.kill(entry.processId);
+        log({ stream: "system", text: `[自动接管] 已清理后台普通 Codex 进程 ${entry.processId}\n` });
+      } catch {}
+    }
+  };
+  staleCleanupTimer = setTimeout(cleanStaleProcesses, 2_000);
+  staleCleanupTimer.unref?.();
   log({ stream: "system", text: "[自动接管] 已启用：检测到普通模式 Codex 重开时会自动接管\n" });
 }
 
